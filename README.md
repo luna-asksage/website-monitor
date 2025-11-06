@@ -1,4 +1,4 @@
-# 🤖 AI Website Monitor
+# 🤖 Website Monitor
 
 Autonomous monitoring system that checks AI product/API websites daily and creates GitHub Issues when relevant updates are detected.
 
@@ -9,12 +9,12 @@ Autonomous monitoring system that checks AI product/API websites daily and creat
 - ✅ Creates GitHub Issues with detailed change summaries
 - ✅ Fully autonomous via GitHub Actions
 - ✅ Searchable history of all detected changes
-- ✅ Zero external dependencies or credentials needed
+- ✅ Uses AskSage api (only credential/token needed)
 - ✅ Free forever on GitHub's infrastructure
 
 ## How It Works
 
-1. GitHub Actions runs daily at 9 AM UTC
+1. GitHub Actions runs daily at 2 PM UTC
 2. Fetches current content from each website
 3. Compares with previous snapshot
 4. If changed, LLM analyzes for product/API relevance
