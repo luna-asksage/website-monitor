@@ -50,23 +50,23 @@ class WebsiteMonitor:
             "openai": {
                 "url": "https://openai.com/news/rss.xml",
                 "name": "OpenAI Product Releases",
-                "type": "rss",  # RSS feed
-                "selectors": ["item"],  # RSS items
+                "type": "rss",
+                "selectors": ["item"],
                 "emoji": "🔵",
                 "label": "openai"
             },
             "gemini": {
-                "url": "https://ai.google.dev/gemini-api/docs/changelog",
+                "url": "https://ai.google.dev/gemini-api/docs/changelog.md.txt",
                 "name": "Google Gemini API Changelog",
-                "type": "html",  # Regular HTML
-                "selectors": ["main", "article", ".content"],
+                "type": "text",
+                "selectors": [],
                 "emoji": "🟡",
                 "label": "gemini"
             },
             "anthropic": {
                 "url": "https://www.anthropic.com/news",
                 "name": "Anthropic News",
-                "type": "html",  # Regular HTML
+                "type": "html",
                 "selectors": ["main", "article", ".content"],
                 "emoji": "🟠",
                 "label": "anthropic"
@@ -256,7 +256,43 @@ class WebsiteMonitor:
             logger.error(f"Failed to fetch HTML {url}: {e}")
             self.errors.append(f"HTML fetch error for {url}: {str(e)}")
             return None
-    
+
+    def _fetch_text_content(self, url: str) -> Optional[str]:
+        """
+        Fetch plain text content from a URL.
+        
+        Args:
+            url: The URL to fetch
+        
+        Returns:
+            Clean text content or None if fetch fails
+        """
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (compatible; AIMonitor/1.0)',
+            }
+            
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            # Handle encoding properly
+            response.encoding = response.apparent_encoding or 'utf-8'
+            
+            # Get the text content
+            content = response.text
+            
+            # Clean up whitespace while preserving structure
+            lines = [line.rstrip() for line in content.split('\n')]
+            content = '\n'.join(lines)
+            
+            # Normalize content to ignore insignificant changes
+            return self._normalize_content(content)
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch text {url}: {e}")
+            self.errors.append(f"Text fetch error for {url}: {str(e)}")
+            return None
+
     def _fetch_website_content(self, url: str, content_type: str, selectors: list) -> Optional[str]:
         """
         Fetch website content based on type.
@@ -271,6 +307,8 @@ class WebsiteMonitor:
         """
         if content_type == 'rss':
             return self._fetch_rss_content(url)
+        elif content_type == 'text':
+            return self._fetch_text_content(url)
         elif content_type == 'html':
             return self._fetch_html_content(url, selectors)
         else:
