@@ -431,7 +431,7 @@ Your response:"""
             logger.debug(f"LLM response: {response_text[:500]}...")
             
             # Check if LLM detected changes
-            if response_text.lower() in ['none', 'false', 'no changes', 'no relevant changes']:
+            if response_text.lower() in ['none', 'false', 'no changes', 'no relevant changes', 'ok']:
                 logger.info(f"No relevant changes detected for {site_name}")
                 return None
             
