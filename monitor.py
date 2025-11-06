@@ -42,18 +42,23 @@ class WebsiteMonitor:
         self.github_token = os.getenv('GITHUB_TOKEN')
         self.github_repo = os.getenv('GITHUB_REPOSITORY')
         
+        # Track errors for reporting
+        self.errors = []
+        
         # Websites to monitor
         self.websites = {
             "openai": {
                 "url": "https://openai.com/news/rss.xml",
                 "name": "OpenAI Product Releases",
-                "selectors": ["main", "article", ".content"],
+                "type": "rss",  # RSS feed
+                "selectors": ["item"],  # RSS items
                 "emoji": "🔵",
                 "label": "openai"
             },
             "gemini": {
-                "url": "https://ai.google.dev/gemini-api/docs/changelog.md.txt",
+                "url": "https://ai.google.dev/gemini-api/docs/changelog",
                 "name": "Google Gemini API Changelog",
+                "type": "html",  # Regular HTML
                 "selectors": ["main", "article", ".content"],
                 "emoji": "🟡",
                 "label": "gemini"
@@ -61,6 +66,7 @@ class WebsiteMonitor:
             "anthropic": {
                 "url": "https://www.anthropic.com/news",
                 "name": "Anthropic News",
+                "type": "html",  # Regular HTML
                 "selectors": ["main", "article", ".content"],
                 "emoji": "🟠",
                 "label": "anthropic"
@@ -135,9 +141,58 @@ class WebsiteMonitor:
         
         return content
     
-    def _fetch_website_content(self, url: str, selectors: list) -> Optional[str]:
+    def _fetch_rss_content(self, url: str) -> Optional[str]:
         """
-        Fetch and extract clean text content from a website.
+        Fetch and parse RSS feed content.
+        
+        Args:
+            url: The RSS feed URL
+        
+        Returns:
+            Clean text content from RSS items or None if fetch fails
+        """
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (compatible; AIMonitor/1.0)',
+            }
+            
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'xml')
+            
+            # Extract all items
+            items = soup.find_all('item')
+            
+            # Build content from items (title + description)
+            content_parts = []
+            for item in items:
+                title = item.find('title')
+                description = item.find('description')
+                pub_date = item.find('pubDate')
+                
+                if title:
+                    content_parts.append(f"TITLE: {title.get_text(strip=True)}")
+                if description:
+                    # Parse HTML in description
+                    desc_soup = BeautifulSoup(description.get_text(), 'html.parser')
+                    desc_text = desc_soup.get_text(separator='\n', strip=True)
+                    content_parts.append(f"DESCRIPTION: {desc_text}")
+                if pub_date:
+                    content_parts.append(f"DATE: {pub_date.get_text(strip=True)}")
+                content_parts.append("---")
+            
+            content = '\n'.join(content_parts)
+            return self._normalize_content(content)
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch RSS feed {url}: {e}")
+            self.errors.append(f"RSS fetch error for {url}: {str(e)}")
+            return None
+    
+    def _fetch_html_content(self, url: str, selectors: list) -> Optional[str]:
+        """
+        Fetch and extract clean text content from HTML website.
         
         Args:
             url: The URL to fetch
@@ -195,16 +250,32 @@ class WebsiteMonitor:
             content = '\n'.join(lines)
             
             # Normalize content to ignore insignificant changes
-            content = self._normalize_content(content)
+            return self._normalize_content(content)
             
-            return content
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to fetch {url}: {e}")
-            return None
         except Exception as e:
-            logger.error(f"Error processing content from {url}: {e}")
+            logger.error(f"Failed to fetch HTML {url}: {e}")
+            self.errors.append(f"HTML fetch error for {url}: {str(e)}")
             return None
+    
+    def _fetch_website_content(self, url: str, content_type: str, selectors: list) -> Optional[str]:
+        """
+        Fetch website content based on type.
+        
+        Args:
+            url: The URL to fetch
+            content_type: Type of content ('html', 'rss', 'text')
+            selectors: List of CSS selectors (for HTML/RSS)
+        
+        Returns:
+            Clean text content or None if fetch fails
+        """
+        if content_type == 'rss':
+            return self._fetch_rss_content(url)
+        elif content_type == 'html':
+            return self._fetch_html_content(url, selectors)
+        else:
+            # Default to HTML
+            return self._fetch_html_content(url, selectors)
     
     def _get_content_hash(self, content: str) -> str:
         """Generate SHA256 hash of content for change detection."""
@@ -275,7 +346,9 @@ DO NOT flag:
 - General website updates
 - UI/UX changes
 
-If you detect relevant changes, respond with a clear, concise summary in GitHub-flavored Markdown format:
+If you detect relevant changes, respond with a clear, concise summary in GitHub-flavored Markdown format.
+
+Start your response with:
 
 ### Summary
 Brief 1-2 sentence overview of what changed.
@@ -283,40 +356,47 @@ Brief 1-2 sentence overview of what changed.
 ### Changes Detected
 
 #### [Category Name]
-- **[Specific change]:** Brief description
-- **[Specific change]:** Brief description
-
-#### [Another Category]
-- **[Specific change]:** Brief description
+- **[Specific change]:** Brief description with details
+- **[Specific change]:** Brief description with details
 
 ### Impact
-Brief note on who/what this affects.
+Brief note on who/what this affects and recommended actions.
 
 ---
 
 If NO relevant changes are detected, respond with exactly: "None"
 
-Be strict - only report changes that would impact developers using these AI products/APIs."""
+Be strict - only report changes that would impact developers using these AI products/APIs. Provide specific details like model names, feature names, dates when available."""
 
         user_message = f"""Website: {site_name}
-Analyze these two versions and identify ONLY product/API changes as defined above.
 
-=== PREVIOUS CONTENT ===
+I'm comparing two versions of this website's content. Analyze the differences and identify ONLY product/API changes as defined above.
+
+=== PREVIOUS CONTENT (15000 chars max) ===
 {old_content[:15000]}
 
-=== CURRENT CONTENT ===
+=== CURRENT CONTENT (15000 chars max) ===
 {new_content[:15000]}
 
-=== END ===
+=== END OF CONTENT ===
 
-Respond with "None" if no relevant changes, or a detailed summary in the format specified if changes detected."""
+Instructions:
+1. Compare the two versions carefully
+2. Identify what changed
+3. Determine if the changes are product/API-related (as defined above)
+4. If yes, provide a detailed summary in the format specified
+5. If no, respond with exactly "None"
+
+Your response:"""
 
         try:
             api_url = self.config['asksage_api']['url']
             api_token = self.config['asksage_api']['token']
             
             if not api_token:
-                logger.error("API token not configured")
+                error_msg = "API token not configured"
+                logger.error(error_msg)
+                self.errors.append(error_msg)
                 return None
             
             files = {
@@ -346,19 +426,32 @@ Respond with "None" if no relevant changes, or a detailed summary in the format 
             
             response_text = response_text.strip()
             
+            # Log the full LLM response for debugging
+            logger.info(f"LLM response length: {len(response_text)} chars")
+            logger.debug(f"LLM response: {response_text[:500]}...")
+            
             # Check if LLM detected changes
             if response_text.lower() in ['none', 'false', 'no changes', 'no relevant changes']:
                 logger.info(f"No relevant changes detected for {site_name}")
+                return None
+            
+            # Verify we got a real summary (not just "None" buried in text)
+            if len(response_text) < 20:
+                logger.warning(f"LLM response too short for {site_name}: {response_text}")
                 return None
             
             logger.info(f"Changes detected for {site_name}")
             return response_text
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed for {site_name}: {e}")
+            error_msg = f"API request failed for {site_name}: {e}"
+            logger.error(error_msg)
+            self.errors.append(error_msg)
             return None
         except Exception as e:
-            logger.error(f"Error analyzing changes for {site_name}: {e}")
+            error_msg = f"Error analyzing changes for {site_name}: {e}"
+            logger.error(error_msg)
+            self.errors.append(error_msg)
             return None
     
     def _create_github_issue(self, site_key: str, site_info: dict, summary: str):
@@ -426,6 +519,56 @@ Respond with "None" if no relevant changes, or a detailed summary in the format 
         except Exception as e:
             logger.error(f"Error creating GitHub issue: {e}")
     
+    def _create_error_issue(self):
+        """Create a GitHub Issue for errors encountered during monitoring."""
+        if not self.errors or not self.github_token or not self.github_repo:
+            return
+        
+        try:
+            title = "⚠️ Website Monitor - Errors Detected"
+            
+            error_list = '\n'.join([f"- {error}" for error in self.errors])
+            
+            body = f"""## Website Monitor Error Report
+
+**Detection Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
+
+The following errors occurred during the monitoring run:
+
+{error_list}
+
+### Recommended Actions
+- [ ] Check API credentials
+- [ ] Verify website URLs are accessible
+- [ ] Review error logs in workflow artifacts
+- [ ] Close this issue when resolved
+
+---
+*This issue was automatically created by the AI Website Monitor*
+"""
+            
+            api_url = f"https://api.github.com/repos/{self.github_repo}/issues"
+            
+            headers = {
+                'Authorization': f'token {self.github_token}',
+                'Accept': 'application/vnd.github.v3+json'
+            }
+            
+            data = {
+                'title': title,
+                'body': body,
+                'labels': ['error', 'automated', 'monitor-health']
+            }
+            
+            response = requests.post(api_url, headers=headers, json=data, timeout=30)
+            response.raise_for_status()
+            
+            issue_data = response.json()
+            logger.info(f"Created error issue #{issue_data['number']}: {issue_data['html_url']}")
+            
+        except Exception as e:
+            logger.error(f"Failed to create error issue: {e}")
+    
     def check_all_websites(self):
         """Main method to check all websites for changes."""
         logger.info("="*60)
@@ -438,7 +581,11 @@ Respond with "None" if no relevant changes, or a detailed summary in the format 
             logger.info(f"\nChecking {site_info['name']}...")
             
             # Fetch current content
-            current_content = self._fetch_website_content(site_info['url'], site_info['selectors'])
+            current_content = self._fetch_website_content(
+                site_info['url'], 
+                site_info.get('type', 'html'),
+                site_info['selectors']
+            )
             
             if not current_content:
                 logger.warning(f"Failed to fetch content for {site_info['name']}, skipping...")
@@ -473,6 +620,11 @@ Respond with "None" if no relevant changes, or a detailed summary in the format 
             
             # Save current content as new baseline
             self._save_content(site_key, current_content, current_hash)
+        
+        # Create error issue if any errors occurred
+        if self.errors:
+            logger.warning(f"\n⚠️  {len(self.errors)} error(s) occurred during monitoring")
+            self._create_error_issue()
         
         # Summary
         if issues_created > 0:
