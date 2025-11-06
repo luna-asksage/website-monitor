@@ -1,95 +1,29 @@
 # Setup Instructions
 
-This guide will help you set up the application on your local machine.
+## 1. Clone the Repository
 
-## Prerequisites
+1. Click the **Fork** or **Clone** button in the repository interface
+2. The repository will be copied to your workspace
 
-- Git installed on your system
-- Python 3.8 or higher (if this is a Python application)
-- Access to your AskSage account and API token
+## 2. Add Your AskSage Token
 
-## Installation Steps
+1. Navigate to **Secrets** in your project settings
+2. Create a new secret with the following details:
+   - **Name:** `ASKSAGE_TOKEN`
+   - **Value:** Your AskSage API token
+3. Save the secret
 
-### 1. Clone the Repository
-
-```bash
-git clone <repository-url>
-cd <repository-name>
-```
-
-Replace `<repository-url>` with the actual URL of this repository.
-
-### 2. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Configure AskSage Token
-
-Your AskSage API token should be stored securely and never committed to version control.
-
-#### Option A: Environment Variables (Recommended)
-
-Create a `.env` file in the project root:
-
-```bash
-touch .env
-```
-
-Add your AskSage token to the `.env` file:
-
-```
-ASKSAGE_TOKEN=your_token_here
-```
-
-**Important:** Ensure `.env` is listed in your `.gitignore` file to prevent accidental commits.
-
-#### Option B: Secrets Management
-
-If using a secrets manager (e.g., AWS Secrets Manager, Azure Key Vault, HashiCorp Vault), configure your token according to your platform's documentation.
-
-#### Option C: Configuration File
-
-Create a `secrets.json` file (ensure it's in `.gitignore`):
-
-```json
-{
-  "asksage_token": "your_token_here"
-}
-```
-
-### 4. Verify Setup
-
-Run the application to verify everything is configured correctly:
-
-```bash
-python src/app.py
-```
-
-## Security Best Practices
-
-- **Never commit secrets** to version control
-- **Rotate tokens regularly** for enhanced security
-- **Use environment-specific tokens** (separate tokens for development, staging, and production)
-- **Limit token permissions** to only what's necessary for the application
-
-## Getting Your AskSage Token
+## 3. Getting Your AskSage Token
 
 1. Log in to your AskSage account
-2. Navigate to Settings → API Tokens
-3. Generate a new token or copy your existing token
-4. Store it securely using one of the methods above
+2. Navigate to **Settings** → **API Tokens**
+3. Copy your existing token or generate a new one
+4. Use this token in the previous step
 
-## Troubleshooting
+## Important
 
-If you encounter issues:
+- Never share your AskSage token publicly
+- Never commit your token to the repository
+- Secrets are stored securely and are not visible in your code
 
-- Verify your token is correctly formatted and has no extra whitespace
-- Check that your `.env` file is in the project root directory
-- Ensure all dependencies are installed correctly
-- Review application logs for specific error messages
-
-## Next Steps
-
-Once setup is complete, refer to the main [README.md](README.md) for usage instructions and API documentation.
+That's it! Your application is now configured and ready to use.
