@@ -12,9 +12,9 @@ on:
       - 'requirements.txt'
       - '.github/workflows/monitor.yml'
   schedule:
-    # Runs every day at 9 AM UTC
-    # Adjust this to your preferred time
-    - cron: '0 9 * * *'
+    # Runs at 8 AM MDT (Mountain Daylight Time, Mar-Nov)
+    # This is 7 AM MST during winter (Nov-Mar)
+    - cron: '0 14 * * *'
   
   # Allows manual triggering from GitHub UI
   workflow_dispatch:
