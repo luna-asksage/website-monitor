@@ -1,0 +1,493 @@
+Newsroom
+Announcements
+Introducing Claude Sonnet 4.5
+Sep 29, 2025
+Policy
+Thoughts on America’s AI Action Plan
+Jul 23, 2025
+Announcements
+Anthropic raises $13B Series F at $183B post-money valuation
+Sep 02, 2025
+Economic Research
+Anthropic Economic Index report: Uneven geographic and enterprise AI adoption
+Sep 15, 2025
+Follow Anthropic
+Anthropic on X
+LinkedIn
+Press inquiries
+press@anthropic.com
+Non-media inquiries
+support@anthropic.com
+Media assets
+Download press kit
+No results found.
+Economic Research
+Launching the Anthropic Economic Futures Programme in the UK and Europe
+Nov 05, 2025
+Announcements
+Anthropic and Iceland announce one of the world’s first national AI education pilots
+Nov 04, 2025
+Announcements
+Anthropic officially opens Tokyo office, signs Memorandum of Cooperation with the Japan AI Safety Institute
+Oct 29, 2025
+Announcements
+Advancing Claude for Financial Services
+Oct 27, 2025
+Announcements
+Seoul becomes Anthropic’s third office in Asia-Pacific as we continue our international growth
+Oct 23, 2025
+Announcements
+Expanding our use of Google Cloud TPUs and Services
+Oct 23, 2025
+Announcements
+A statement from Dario Amodei on Anthropic's commitment to American AI leadership
+Oct 21, 2025
+Announcements
+Claude for Life Sciences
+Oct 20, 2025
+Product
+Introducing Claude Haiku 4.5
+Oct 15, 2025
+Announcements
+Anthropic and Salesforce expand partnership to bring Claude to regulated industries
+Oct 14, 2025
+Announcements
+Expanding our global operations to India with our second Asia Pacific office
+Oct 07, 2025
+Announcements
+Rahul Patil joins Anthropic as Chief Technology Officer
+Oct 7, 2025
+Announcements
+Deloitte will make Claude available to 470,000 people across its global network
+Oct 06, 2025
+Policy
+Building AI for cyber defenders
+Oct 03, 2025
+Product
+Enabling Claude Code to work more autonomously
+Sep 29, 2025
+Announcements
+Introducing Claude Sonnet 4.5
+Sep 29, 2025
+Announcements
+Anthropic expands global leadership in enterprise AI, naming Chris Ciauri as Managing Director of International
+Sep 26, 2025
+Product
+Claude is now generally available in Xcode
+Sep 15, 2025
+Economic Research
+Anthropic Economic Index report: Uneven geographic and enterprise AI adoption
+Sep 15, 2025
+Economic Research
+Anthropic Economic Index: Tracking AI’s role in the US and global economy
+Sep 15, 2025
+Announcements
+Strengthening our safeguards through collaboration with US CAISI and UK AISI
+Sep 12, 2025
+Announcements
+Anthropic is endorsing SB 53
+Sep 08, 2025
+Announcements
+Updating restrictions of sales to unsupported regions
+Sep 04, 2025
+Announcements
+Anthropic Signs White House Pledge to America's Youth: Investing in AI Education
+Sep 04, 2025
+Announcements
+Anthropic raises $13B Series F at $183B post-money valuation
+Sep 02, 2025
+Product
+Updates to Consumer Terms and Privacy Policy
+Aug 28, 2025
+Announcements
+Detecting and countering misuse of AI: August 2025
+Aug 27, 2025
+Announcements
+Introducing the Anthropic National Security and Public Sector Advisory Council
+Aug 27, 2025
+Societal Impacts
+Anthropic Education Report: How educators use Claude
+Aug 27, 2025
+Announcements
+Anthropic launches higher education advisory board and AI Fluency courses
+Aug 21, 2025
+Announcements
+Developing nuclear safeguards for AI through public-private partnership
+Aug 21, 2025
+Product
+Claude Code and new admin controls for business plans
+Aug 20, 2025
+Policy
+Usage policy update
+Aug 15, 2025
+Product
+Building safeguards for Claude
+Aug 12, 2025
+Announcements
+Offering expanded Claude access across all three branches of the U.S. government
+Aug 12, 2025
+Announcements
+Anthropic appoints Hidetoshi Tojo as Head of Japan and announces hiring plans
+Aug 6, 2025
+Announcements
+Claude Opus 4.1
+Aug 05, 2025
+Announcements
+Federal government departments and agencies can now purchase Claude through the GSA schedule
+Aug 05, 2025
+Policy
+Our framework for developing safe and trustworthy agents
+Aug 04, 2025
+Policy
+Anthropic Signs CMS Health Tech Ecosystem Pledge to Advance Healthcare Interoperability
+Jul 30, 2025
+Policy
+Thoughts on America’s AI Action Plan
+Jul 23, 2025
+Announcements
+Anthropic partners with the University of Chicago’s Becker Friedman Institute on AI economic research
+Jul 23, 2025
+Policy
+Build AI in America
+Jul 21, 2025
+Policy
+Anthropic to sign the EU Code of Practice
+Jul 21, 2025
+Announcements
+Paul Smith to join Anthropic as Chief Commercial Officer
+Jul 15, 2025
+Product
+Claude for Financial Services
+Jul 15, 2025
+Alignment
+Investing in energy to secure America's AI future
+Jul 15, 2025
+Announcements
+Anthropic and the Department of Defense to advance responsible AI in defense operations
+Jul 14, 2025
+Product
+Advancing Claude for Education
+Jul 09, 2025
+Announcements
+Lawrence Livermore National Laboratory expands Claude for Enterprise use to empower scientists and researchers
+Jul 09, 2025
+Policy
+The need for transparency in Frontier AI
+Jul 07, 2025
+Announcements
+Introducing the Anthropic Economic Futures Program
+Jun 27, 2025
+Societal Impacts
+How people use Claude for support, advice, and companionship
+Jun 27, 2025
+Announcements
+Claude in Amazon Bedrock: Approved for use in FedRAMP High and DoD IL4/5 workloads
+Jun 11, 2025
+Announcements
+National security expert Richard Fontaine appointed to Anthropic’s long-term benefit trust
+Jun 7, 2025
+Announcements
+Claude Gov models for U.S. national security customers
+Jun 06, 2025
+Announcements
+Reed Hastings appointed to Anthropic’s board of directors
+May 28, 2025
+Policy
+Activating AI Safety Level 3 protections
+May 22, 2025
+Announcements
+Introducing Claude 4
+May 22, 2025
+Announcements
+Testing our safety defenses with a new bug bounty program
+May 14, 2025
+Announcements
+Introducing Anthropic's AI for Science Program
+May 05, 2025
+Policy
+Securing America's compute advantage: Anthropic’s position on the diffusion rule
+Apr 30, 2025
+Announcements
+Introducing the Anthropic Economic Advisory Council
+Apr 28, 2025
+Societal Impacts
+Anthropic Economic Index: AI’s impact on software development
+Apr 28, 2025
+Societal Impacts
+Detecting and countering malicious uses of Claude: March 2025
+Apr 23, 2025
+Policy
+Our approach to understanding and addressing AI harms
+Apr 21, 2025
+Announcements
+Anthropic Education Report: How university students use Claude
+Apr 08, 2025
+Announcements
+Anthropic appoints Guillaume Princen as Head of EMEA and announces 100+ new roles across the region
+Apr 8, 2025
+Event
+Introducing Anthropic's first developer conference: Code with Claude
+Apr 3, 2025
+Education
+Introducing Claude for Education
+Apr 02, 2025
+Announcements
+Anthropic Economic Index: Insights from Claude 3.7 Sonnet
+Mar 27, 2025
+Interpretability
+Tracing the thoughts of a large language model
+Mar 27, 2025
+Societal Impacts
+Anthropic’s response to Governor Newsom’s AI working group draft report
+Mar 19, 2025
+Policy
+Progress from our Frontier Red Team
+Mar 19, 2025
+Societal Impacts
+Anthropic’s recommendations to OSTP for the U.S. AI action plan
+Mar 06, 2025
+Announcements
+Anthropic raises Series E at $61.5B post-money valuation
+Mar 03, 2025
+Announcements
+Anthropic partners with U.S. National Labs for first 1,000 Scientist AI Jam
+Feb 28, 2025
+Societal Impacts
+Introducing Anthropic's Transparency Hub
+Feb 27, 2025
+Announcements
+Claude and Alexa+
+Feb 26, 2025
+Announcements
+Claude 3.7 Sonnet and Claude Code
+Feb 24, 2025
+Announcements
+Claude’s extended thinking
+Feb 24, 2025
+Announcements
+Anthropic signs MOU with UK Government to explore how AI can transform UK public services
+Feb 14, 2025
+Announcements
+·
+Policy
+Statement from Dario Amodei on the Paris AI Action Summit
+Feb 11, 2025
+Announcements
+The Anthropic Economic Index
+Feb 10, 2025
+Announcements
+Lyft to bring Claude to more than 40 million riders and over 1 million drivers
+Feb 6, 2025
+Announcements
+Anthropic achieves ISO 42001 certification for responsible AI
+Jan 13, 2025
+Alignment
+Alignment faking in large language models
+Dec 18, 2024
+Societal Impacts
+Elections and AI in 2024: observations and learnings
+Dec 12, 2024
+Announcements
+Introducing the Model Context Protocol
+Nov 25, 2024
+Announcements
+Powering the next generation of AI development with AWS
+Nov 22, 2024
+Policy
+The case for targeted regulation
+Oct 31, 2024
+Product
+Raising the bar on SWE-bench Verified with Claude 3.5 Sonnet
+Oct 30, 2024
+Announcements
+Claude 3.5 Sonnet on GitHub Copilot
+Oct 29, 2024
+Announcements
+·
+Product
+Developing a computer use model
+Oct 22, 2024
+Announcements
+Introducing computer use, a new Claude 3.5 Sonnet, and Claude 3.5 Haiku
+Oct 22, 2024
+Announcements
+Announcing our updated Responsible Scaling Policy
+Oct 15, 2024
+Societal Impacts
+U.S. Elections Readiness
+Oct 8, 2024
+Product
+·
+Announcements
+Introducing Contextual Retrieval
+Sep 19, 2024
+Announcements
+Salesforce teams up with Anthropic to enhance Einstein capabilities with Claude
+Sep 3, 2024
+Announcements
+Expanding our model safety bug bounty program
+Aug 8, 2024
+Announcements
+Claude is now available in Brazil
+Aug 1, 2024
+Announcements
+Anthropic partners with Menlo Ventures to launch Anthology Fund
+Jul 17, 2024
+Product
+Fine-tune Claude 3 Haiku in Amazon Bedrock
+Jul 11, 2024
+Announcements
+A new initiative for developing third-party model evaluations
+Jul 1, 2024
+Announcements
+Expanding access to Claude for government
+Jun 26, 2024
+Product
+Collaborate with Claude on Projects
+Jun 25, 2024
+Announcements
+Claude 3.5 Sonnet
+Jun 21, 2024
+Policy
+Challenges in red teaming AI systems
+Jun 12, 2024
+Policy
+·
+Societal Impacts
+Testing and mitigating elections-related risks
+Jun 6, 2024
+Announcements
+Introducing Claude to Canada
+Jun 5, 2024
+Announcements
+Jay Kreps appointed to Anthropic's Board of Directors
+May 29, 2024
+Product
+Golden Gate Claude
+May 23, 2024
+Announcements
+Krishna Rao joins Anthropic as Chief Financial Officer
+May 21, 2024
+Interpretability
+Mapping the Mind of a Large Language Model
+May 21, 2024
+Policy
+Reflections on our Responsible Scaling Policy
+May 20, 2024
+Announcements
+Mike Krieger joins Anthropic as Chief Product Officer
+May 15, 2024
+Announcements
+Claude is now available in Europe
+May 14, 2024
+Announcements
+Updating our Usage Policy
+May 10, 2024
+Announcements
+Aligning on child safety principles
+Apr 23, 2024
+Alignment
+Many-shot jailbreaking
+Apr 2, 2024
+Policy
+Third-party testing as a key ingredient of AI policy
+Mar 25, 2024
+Announcements
+Anthropic, AWS, and Accenture team up to build trusted solutions for enterprises
+Mar 20, 2024
+Announcements
+Claude 3 models on Vertex AI
+Mar 19, 2024
+Announcements
+Claude 3 Haiku: our fastest model yet
+Mar 13, 2024
+Announcements
+Introducing the next generation of Claude
+Mar 4, 2024
+Product
+Prompt engineering for business performance
+Feb 29, 2024
+Policy
+Preparing for global elections in 2024
+Feb 16, 2024
+Announcements
+Expanded legal protections and improvements to our API
+Dec 19, 2023
+Product
+Introducing Claude 2.1
+Nov 21, 2023
+Policy
+Thoughts on the US Executive Order, G7 Code of Conduct, and Bletchley Park Summit
+Nov 5, 2023
+Policy
+Dario Amodei’s prepared remarks from the AI Safety Summit on Anthropic’s Responsible Scaling Policy
+Nov 1, 2023
+Announcements
+Expanding access to safer AI with Amazon
+Sep 25, 2023
+Product
+Prompt engineering for Claude's long context window
+Sep 23, 2023
+Announcements
+Anthropic's Responsible Scaling Policy
+Sep 19, 2023
+Announcements
+The Long-Term Benefit Trust
+Sep 19, 2023
+Announcements
+Anthropic partners with BCG
+Sep 14, 2023
+Announcements
+Introducing Claude Pro
+Sep 7, 2023
+Announcements
+SKT Partnership Announcement
+Aug 15, 2023
+Announcements
+Releasing Claude Instant 1.2
+Aug 9, 2023
+Announcements
+Frontier Threats Red Teaming for AI Safety
+Jul 26, 2023
+Announcements
+Frontier Model Security
+Jul 25, 2023
+Announcements
+Claude 2
+Jul 11, 2023
+Announcements
+Charting a Path to AI Accountability
+Jun 13, 2023
+Announcements
+Anthropic Raises $450 Million in Series C Funding to Scale Reliable AI Products
+May 23, 2023
+Announcements
+Zoom Partnership and Investment in Anthropic
+May 16, 2023
+Announcements
+Introducing 100K Context Windows
+May 11, 2023
+Announcements
+Claude’s Constitution
+May 9, 2023
+Announcements
+Partnering with Scale to Bring Generative AI to Enterprises
+Apr 26, 2023
+Announcements
+An AI Policy Tool for Today: Ambitiously Invest in NIST
+Apr 20, 2023
+Announcements
+Introducing Claude
+Mar 14, 2023
+Announcements
+Core Views on AI Safety: When, Why, What, and How
+Mar 08, 2023
+Announcements
+Anthropic Partners with Google Cloud
+Feb 3, 2023
+Announcements
+Anthropic Raises Series B to build steerable, interpretable, robust AI systems
+Apr 29, 2022
+Announcements
+Anthropic raises $124 million to build more reliable, general AI systems
+May 28, 2021
