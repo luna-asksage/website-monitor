@@ -8,6 +8,7 @@ import os
 import json
 import hashlib
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -44,14 +45,14 @@ class WebsiteMonitor:
         # Websites to monitor
         self.websites = {
             "openai": {
-                "url": "https://openai.com/news/product-releases/?display=list",
+                "url": "https://openai.com/news/rss.xml",
                 "name": "OpenAI Product Releases",
                 "selectors": ["main", "article", ".content"],
                 "emoji": "🔵",
                 "label": "openai"
             },
             "gemini": {
-                "url": "https://ai.google.dev/gemini-api/docs/changelog",
+                "url": "https://ai.google.dev/gemini-api/docs/changelog.md.txt",
                 "name": "Google Gemini API Changelog",
                 "selectors": ["main", "article", ".content"],
                 "emoji": "🟡",
@@ -101,6 +102,39 @@ class WebsiteMonitor:
             self.config['asksage_api']['token'] = os.getenv('ASKSAGE_API_TOKEN')
             logger.info("Using API token from environment variable")
     
+    def _normalize_content(self, content: str) -> str:
+        """
+        Normalize content to ignore insignificant changes.
+        
+        This removes:
+        - Extra whitespace
+        - Timestamps and dates
+        - Session IDs and tracking parameters
+        - Non-breaking spaces and special characters that might vary
+        """
+        # Replace non-breaking spaces and other Unicode spaces with regular spaces
+        content = re.sub(r'[\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000\uFEFF]', ' ', content)
+        
+        # Remove common dynamic elements
+        # Remove ISO timestamps
+        content = re.sub(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?', '', content)
+        
+        # Remove common date formats
+        content = re.sub(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}', '', content)
+        content = re.sub(r'\d{1,2}/\d{1,2}/\d{2,4}', '', content)
+        
+        # Remove time stamps
+        content = re.sub(r'\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM|am|pm)?', '', content)
+        
+        # Normalize whitespace
+        content = re.sub(r'\s+', ' ', content)
+        content = content.strip()
+        
+        # Remove any remaining problematic Unicode characters
+        content = content.encode('ascii', 'ignore').decode('ascii')
+        
+        return content
+    
     def _fetch_website_content(self, url: str, selectors: list) -> Optional[str]:
         """
         Fetch and extract clean text content from a website.
@@ -115,7 +149,7 @@ class WebsiteMonitor:
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Accept-Encoding': 'gzip, deflate, br',
                 'DNT': '1',
@@ -124,15 +158,20 @@ class WebsiteMonitor:
                 'Sec-Fetch-Dest': 'document',
                 'Sec-Fetch-Mode': 'navigate',
                 'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
                 'Cache-Control': 'max-age=0',
             }
-            response = requests.get(url, headers=headers, timeout=30)
+            
+            response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
             response.raise_for_status()
             
-            soup = BeautifulSoup(response.content, 'html.parser')
+            # Handle encoding properly
+            response.encoding = response.apparent_encoding or 'utf-8'
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
             
             # Remove unwanted elements
-            for element in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            for element in soup(["script", "style", "nav", "footer", "header", "aside", "iframe", "noscript"]):
                 element.decompose()
             
             # Try selectors in order
@@ -153,7 +192,12 @@ class WebsiteMonitor:
             
             # Clean up whitespace
             lines = [line.strip() for line in content.split('\n') if line.strip()]
-            return '\n'.join(lines)
+            content = '\n'.join(lines)
+            
+            # Normalize content to ignore insignificant changes
+            content = self._normalize_content(content)
+            
+            return content
             
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to fetch {url}: {e}")
