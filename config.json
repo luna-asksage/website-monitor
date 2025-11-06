@@ -1,0 +1,8 @@
+{
+  "asksage_api": {
+    "url": "https://api.asksage.ai/server/query",
+    "model": "gemini-2.5-flash",
+    "temperature": 0.1
+  },
+  "storage_dir": "storage"
+}
