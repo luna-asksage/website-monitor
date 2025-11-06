@@ -1,6 +1,16 @@
 name: AI Website Monitor
 
 on:
+  # Run on every push to main branch
+  push:
+    branches:
+      - main
+    # Optional: only run if these files change
+    paths:
+      - 'monitor.py'
+      - 'config.json'
+      - 'requirements.txt'
+      - '.github/workflows/monitor.yml'
   schedule:
     # Runs every day at 9 AM UTC
     # Adjust this to your preferred time
