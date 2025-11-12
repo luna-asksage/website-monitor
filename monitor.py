@@ -371,7 +371,7 @@ IMPORTANT: Only flag changes in these categories:
 - New AI models or model versions
 - Model pricing changes
 - New API features or capabilities
-- API deprecations or breaking changes
+- API or model deprecations or breaking changes
 - Significant model capability improvements
 - New SDKs or development tools
 - New API endpoints or parameters
