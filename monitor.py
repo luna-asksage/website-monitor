@@ -79,7 +79,7 @@ class WebsiteMonitor:
             "asksage_api": {
                 "url": "https://api.asksage.ai/server/query",
                 "token": "",
-                "model": "gemini-2.5-flash",
+                "model": "google-gemini-2.5-pro",
                 "temperature": 0.1
             },
             "storage_dir": "storage"
