@@ -189,10 +189,11 @@ class WebsiteMonitor:
                 "label": "openai",
                 "base_url": "https://openai.com"
             },
-            "anthropic_rss": {
-                "url": "https://www.anthropic.com/rss.xml",
+            "anthropic_news": {
+                "url": "https://www.anthropic.com/news",
                 "name": "Anthropic News",
-                "type": "rss",
+                "type": "html_news",
+                "selectors": ["main", "article", "[data-testid]", ".content"],
                 "emoji": "🟠",
                 "label": "anthropic",
                 "base_url": "https://www.anthropic.com"
@@ -222,8 +223,8 @@ class WebsiteMonitor:
             "asksage_api": {
                 "url": "https://api.asksage.ai/server/query",
                 "token": "",
-                "model": "google-gemini-2.5-pro",
-                "temperature": 0.1
+                "model": "google-claude-45-sonnet",
+                "temperature": 0.2
             },
             "storage_dir": "storage",
         }
@@ -295,6 +296,174 @@ class WebsiteMonitor:
     # =========================================================================
     # Content Extraction
     # =========================================================================
+
+    def _extract_news_listing_items(self, url: str, source_name: str,
+                                     selectors: List[str], base_url: str) -> List[ContentItem]:
+        """
+        Extract news articles from a listing page (like anthropic.com/news).
+        Looks for article cards with links.
+        """
+        items = []
+        response = self.fetcher.fetch(url)
+        if not response:
+            self.errors.append(f"Failed to fetch news page: {url}")
+            return items
+        
+        try:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Check for JS-rendered page
+            body_text = soup.get_text(strip=True)
+            if len(body_text) < 200:
+                logger.warning(f"Page may be JS-rendered: {url}")
+                self.errors.append(f"Page may be JS-rendered: {url}")
+                return items
+            
+            # Remove clutter
+            for el in soup(["script", "style", "nav", "footer", "header", "aside", "svg"]):
+                el.decompose()
+            
+            # Find main content area
+            main = None
+            for sel in selectors:
+                main = soup.select_one(sel)
+                if main:
+                    break
+            if not main:
+                main = soup.body or soup
+            
+            # Strategy 1: Find article cards by looking for links with headings inside
+            # Common patterns: <a href="..."><h2>Title</h2>...</a>
+            # or: <article><a href="...">...</a><h2>Title</h2></article>
+            
+            # Find all links that look like article links
+            article_links = []
+            for a in main.find_all('a', href=True):
+                href = a['href']
+                
+                # Filter to likely article links
+                if not href:
+                    continue
+                if href.startswith('#') or href.startswith('mailto:') or href.startswith('javascript:'):
+                    continue
+                
+                # Look for news/blog patterns in URL
+                href_lower = href.lower()
+                is_article_link = any(pattern in href_lower for pattern in [
+                    '/news/', '/blog/', '/research/', '/announcements/',
+                    '/posts/', '/articles/', '/updates/'
+                ])
+                
+                # Also check if link contains a heading (strong signal it's an article card)
+                has_heading = a.find(['h1', 'h2', 'h3', 'h4']) is not None
+                
+                if is_article_link or has_heading:
+                    article_links.append(a)
+            
+            # Strategy 2: Find article/card containers
+            card_selectors = [
+                'article',
+                '[class*="card"]',
+                '[class*="post"]',
+                '[class*="article"]',
+                '[class*="news-item"]',
+                '[class*="entry"]',
+            ]
+            
+            for selector in card_selectors:
+                try:
+                    cards = main.select(selector)
+                    for card in cards:
+                        link = card.find('a', href=True)
+                        if link and link not in article_links:
+                            href = link['href']
+                            if href and not href.startswith('#'):
+                                article_links.append(link)
+                except Exception:
+                    continue
+            
+            # Deduplicate by href
+            seen_hrefs = set()
+            unique_links = []
+            for a in article_links:
+                href = a['href']
+                if href not in seen_hrefs:
+                    seen_hrefs.add(href)
+                    unique_links.append(a)
+            
+            # Extract items from links
+            for a in unique_links[:20]:  # Limit to 20 most recent
+                href = a['href']
+                
+                # Resolve relative URLs
+                if href.startswith('/'):
+                    href = urljoin(base_url, href)
+                elif not href.startswith('http'):
+                    href = urljoin(url, href)
+                
+                href = self._clean_url(href)
+                
+                # Find title - check inside the link first, then nearby
+                title = ""
+                heading = a.find(['h1', 'h2', 'h3', 'h4'])
+                if heading:
+                    title = heading.get_text(strip=True)
+                else:
+                    # Try the link text itself
+                    link_text = a.get_text(strip=True)
+                    if len(link_text) > 10 and len(link_text) < 200:
+                        title = link_text
+                    else:
+                        # Try to find heading in parent or siblings
+                        parent = a.find_parent(['article', 'div', 'section', 'li'])
+                        if parent:
+                            heading = parent.find(['h1', 'h2', 'h3', 'h4'])
+                            if heading:
+                                title = heading.get_text(strip=True)
+                
+                if not title:
+                    # Extract from URL slug as last resort
+                    slug = href.rstrip('/').split('/')[-1]
+                    title = slug.replace('-', ' ').replace('_', ' ').title()
+                
+                # Find date if available
+                date = None
+                parent = a.find_parent(['article', 'div', 'section', 'li'])
+                if parent:
+                    time_el = parent.find('time')
+                    if time_el:
+                        date_str = time_el.get('datetime') or time_el.get_text(strip=True)
+                        date = self._parse_date(date_str)
+                
+                # Get preview content
+                content = ""
+                if parent:
+                    # Look for description/excerpt
+                    for p in parent.find_all('p'):
+                        p_text = p.get_text(strip=True)
+                        if len(p_text) > 20:
+                            content = p_text
+                            break
+                
+                item_id = self._generate_id(href, title)
+                
+                items.append(ContentItem(
+                    id=item_id,
+                    title=title,
+                    content=self._clean_text(content),
+                    date=date,
+                    link=href,
+                    source=url,
+                    source_name=source_name
+                ))
+            
+            logger.info(f"Extracted {len(items)} news items from {source_name}")
+            
+        except Exception as e:
+            logger.error(f"Failed to parse news page {url}: {e}")
+            self.errors.append(f"News page parse error for {url}: {str(e)}")
+        
+        return items
     
     def _extract_rss_items(self, url: str, source_name: str, base_url: str) -> List[ContentItem]:
         """Extract items from RSS feed."""
@@ -817,21 +986,30 @@ Generate a detailed but concise summary for developers."""
         logger.info(f"Processing {site_info['name']}...")
         
         # Extract items based on type
-        if site_info['type'] == 'rss':
+        content_type = site_info['type']
+        
+        if content_type == 'rss':
             items = self._extract_rss_items(
                 site_info['url'], 
                 site_info['name'],
                 site_info['base_url']
             )
-        elif site_info['type'] == 'html_changelog':
+        elif content_type == 'html_changelog':
             items = self._extract_changelog_items(
                 site_info['url'],
                 site_info['name'],
                 site_info.get('selectors', ['main']),
                 site_info['base_url']
             )
+        elif content_type == 'html_news':
+            items = self._extract_news_listing_items(
+                site_info['url'],
+                site_info['name'],
+                site_info.get('selectors', ['main']),
+                site_info['base_url']
+            )
         else:
-            logger.warning(f"Unknown type: {site_info['type']}")
+            logger.warning(f"Unknown type: {content_type}")
             return []
         
         if not items:
