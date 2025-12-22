@@ -74,15 +74,6 @@ class WebsiteMonitor:
                 "emoji": "🔵",
                 "label": "openai"
             },
-            "openai_changelog": {
-                "url": "https://platform.openai.com/docs/changelog",
-                "name": "OpenAI API Changelog",
-                "type": "html",
-                "selectors": ["main", "article", ".docs-content", "[data-testid='changelog']"],
-                "follow_links": False,
-                "emoji": "🔵",
-                "label": "openai"
-            },
             "gemini_changelog": {
                 "url": "https://ai.google.dev/gemini-api/docs/changelog",
                 "name": "Google Gemini API Changelog",
@@ -102,8 +93,8 @@ class WebsiteMonitor:
                 "label": "anthropic"
             },
             "anthropic_api": {
-                "url": "https://docs.anthropic.com/en/api/versioning",
-                "name": "Anthropic API Versions",
+                "url": "https://docs.anthropic.com/en/release-notes/overview",
+                "name": "Anthropic API Release Notes",
                 "type": "html",
                 "selectors": ["main", "article", ".content"],
                 "follow_links": False,
