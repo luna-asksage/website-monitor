@@ -1,0 +1,405 @@
+{
+  "items": [
+    {
+      "id": "0ad9fbef8c874c3e",
+      "title": "Continuously hardening ChatGPT Atlas against prompt injection",
+      "content": "OpenAI is strengthening ChatGPT Atlas against prompt injection attacks using automated red teaming trained with reinforcement learning. This proactive discover-and-patch loop helps identify novel exploits early and harden the browser agent\u2019s defenses as AI becomes more agentic.",
+      "date": "Mon, 22 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/hardening-atlas-against-prompt-injection",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "4906715399cf0201",
+      "title": "One in a million: celebrating the customers shaping AI\u2019s future",
+      "content": "More than one million customers around the world now use OpenAI to empower their teams and unlock new opportunities. This post highlights how companies like PayPal, Virgin Atlantic, BBVA, Cisco, Moderna, and Canva are transforming the way work gets done with AI.",
+      "date": "Mon, 22 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/one-in-a-million-customers",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "454ed7542563ef9c",
+      "title": "Evaluating chain-of-thought monitorability",
+      "content": "OpenAI introduces a new framework and evaluation suite for chain-of-thought monitorability, covering 13 evaluations across 24 environments. Our findings show that monitoring a model\u2019s internal reasoning is far more effective than monitoring outputs alone, offering a promising path toward scalable control as AI systems grow more capable.",
+      "date": "Thu, 18 Dec 2025 12:00:00 GMT",
+      "link": "https://openai.com/index/evaluating-chain-of-thought-monitorability",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "1c04d5e205f83e52",
+      "title": "AI literacy resources for teens and parents",
+      "content": "OpenAI shares new AI literacy resources to help teens and parents use ChatGPT thoughtfully, safely, and with confidence. The guides include expert-vetted tips for responsible use, critical thinking, healthy boundaries, and supporting teens through emotional or sensitive topics.",
+      "date": "Thu, 18 Dec 2025 11:00:00 GMT",
+      "link": "https://openai.com/index/ai-literacy-resources-for-teens-and-parents",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "020ab4b4b78d46cf",
+      "title": "Updating our Model Spec with teen protections",
+      "content": "OpenAI is updating its Model Spec with new Under-18 Principles that define how ChatGPT should support teens with safe, age-appropriate guidance grounded in developmental science. The update strengthens guardrails, clarifies expected model behavior in higher-risk situations, and builds on our broader work to improve teen safety across ChatGPT.",
+      "date": "Thu, 18 Dec 2025 11:00:00 GMT",
+      "link": "https://openai.com/index/updating-model-spec-with-teen-protections",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "83beb5a32b71ab5a",
+      "title": "Deepening our collaboration with the U.S. Department of Energy",
+      "content": "OpenAI and the U.S. Department of Energy have signed a memorandum of understanding to deepen collaboration on AI and advanced computing in support of scientific discovery. The agreement builds on ongoing work with national laboratories and helps establish a framework for applying AI to high-impact research across the DOE ecosystem.",
+      "date": "Thu, 18 Dec 2025 11:00:00 GMT",
+      "link": "https://openai.com/index/us-department-of-energy-collaboration",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "bcec01148b652923",
+      "title": "Introducing GPT-5.2-Codex",
+      "content": "GPT-5.2-Codex is OpenAI\u2019s most advanced coding model, offering long-horizon reasoning, large-scale code transformations, and enhanced cybersecurity capabilities.",
+      "date": "Thu, 18 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/gpt-5-2-codex",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "cd8d6c8023f2f56d",
+      "title": "Introducing GPT-5.2-Codex",
+      "content": "GPT-5.2-Codex is OpenAI\u2019s most advanced coding model, offering long-horizon reasoning, large-scale code transformations, and enhanced cybersecurity capabilities.",
+      "date": "Thu, 18 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/introducing-gpt-5-2-codex",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "7fda7ddac79f0115",
+      "title": "Addendum to GPT-5.2 System Card: GPT-5.2-Codex",
+      "content": "This system card outlines the comprehensive safety measures implemented for GPT\u20115.2-Codex. It details both model-level mitigations, such as specialized safety training for harmful tasks and prompt injections, and product-level mitigations like agent sandboxing and configurable network access.",
+      "date": "Thu, 18 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/gpt-5-2-codex-system-card",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "56b15a316092221d",
+      "title": "Introducing OpenAI Academy for News Organizations",
+      "content": "OpenAI is launching the OpenAI Academy for News Organizations, a new learning hub built with the American Journalism Project and The Lenfest Institute to help newsrooms use AI effectively. The Academy offers training, practical use cases, and responsible-use guidance to support journalists, editors, and publishers as they adopt AI in their reporting and operations.",
+      "date": "Wed, 17 Dec 2025 06:00:00 GMT",
+      "link": "https://openai.com/index/openai-academy-for-news-organizations",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "97debc210b6974cc",
+      "title": "Developers can now submit apps to ChatGPT",
+      "content": "Developers can now submit apps for review and publication in ChatGPT, with approved apps appearing in a new in-product directory for easy discovery. Updated tools, guidelines, and the Apps SDK help developers build powerful chat-native experiences that bring real-world actions into ChatGPT.",
+      "date": "Wed, 17 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/developers-can-now-submit-apps-to-chatgpt",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "1b288e83884e793f",
+      "title": "Evaluating AI\u2019s ability to perform scientific research tasks",
+      "content": "OpenAI introduces FrontierScience, a benchmark testing AI reasoning in physics, chemistry, and biology to measure progress toward real scientific research.",
+      "date": "Tue, 16 Dec 2025 09:00:00 GMT",
+      "link": "https://openai.com/index/frontierscience",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "3f703ff65ec620e5",
+      "title": "Measuring AI\u2019s capability to accelerate biological research",
+      "content": "OpenAI introduces a real-world evaluation framework to measure how AI can accelerate biological research in the wet lab. Using GPT-5 to optimize a molecular cloning protocol, the work explores both the promise and risks of AI-assisted experimentation.",
+      "date": "Tue, 16 Dec 2025 08:00:00 GMT",
+      "link": "https://openai.com/index/accelerating-biological-research-in-the-wet-lab",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "e2e14d0c1d724cca",
+      "title": "The new ChatGPT Images is here",
+      "content": "The new ChatGPT Images is powered by our flagship image generation model, delivering more precise edits, consistent details, and image generation up to 4\u00d7 faster. The upgraded model is rolling out to all ChatGPT users today and is also available in the API as GPT-Image-1.5.",
+      "date": "Tue, 16 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/new-chatgpt-images-is-here",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "c81f77b805490ba2",
+      "title": "BBVA and OpenAI collaborate to transform global banking",
+      "content": "BBVA is expanding its work with OpenAI through a multi-year AI transformation program, rolling out ChatGPT Enterprise to all 120,000 employees. Together, the companies will develop AI solutions that enhance customer interactions, streamline operations, and help build an AI-native banking experience.",
+      "date": "Fri, 12 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/bbva-collaboration-expansion",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "eafd28afa8a69fbc",
+      "title": "How We Used Codex to Ship Sora for Android in 28 Days",
+      "content": "OpenAI shipped Sora for Android in 28 days using Codex. AI-assisted planning, translation, and parallel coding workflows helped a nimble team deliver rapid, reliable development.",
+      "date": "Fri, 12 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/shipping-sora-for-android-with-codex",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "def3827576d5f32d",
+      "title": "BNY builds \u201cAI for everyone, everywhere\u201d with OpenAI",
+      "content": "BNY is using OpenAI technology to expand AI adoption enterprise-wide. Through its Eliza platform, 20,000+ employees are building AI agents that enhance efficiency and improve client outcomes.",
+      "date": "Fri, 12 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/bny",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "03cba5d2396520e3",
+      "title": "Advancing science and math with GPT-5.2",
+      "content": "GPT-5.2 is OpenAI\u2019s strongest model yet for math and science, setting new state-of-the-art results on benchmarks like GPQA Diamond and FrontierMath. This post shows how those gains translate into real research progress, including solving an open theoretical problem and generating reliable mathematical proofs.",
+      "date": "Thu, 11 Dec 2025 10:00:00 GMT",
+      "link": "https://openai.com/index/gpt-5-2-for-science-and-math",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "792a066e22a14011",
+      "title": "The Walt Disney Company and OpenAI reach landmark agreement to bring beloved characters to Sora",
+      "content": "Disney and OpenAI have reached an agreement to bring more than 200 Disney, Marvel, Pixar and Star Wars characters to Sora for fan-inspired short videos. The agreement emphasizes responsible AI in entertainment and includes Disney\u2019s company-wide use of ChatGPT Enterprise and the OpenAI API.",
+      "date": "Thu, 11 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/disney-sora-agreement",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "6978d9846f9014de",
+      "title": "Ten years",
+      "content": "OpenAI reflects on ten years of progress, from early research breakthroughs to widely used AI systems that reshaped what\u2019s possible. We share lessons from the past decade and why we remain optimistic about building AGI that benefits all of humanity.",
+      "date": "Thu, 11 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/ten-years",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "18ba0c6ad33e9be0",
+      "title": "Update to GPT-5 System Card: GPT-5.2",
+      "content": "GPT-5.2 is the latest model family in the GPT-5 series. The comprehensive safety mitigation approach for these models is largely the same as that described in the GPT-5 System Card and GPT-5.1 System Card. Like OpenAI\u2019s other models, the GPT-5.2 models were trained on diverse datasets, including information that is publicly available on the internet, information that we partner with third parties to access, and information that our users or human trainers and researchers provide or generate.",
+      "date": "Thu, 11 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/gpt-5-system-card-update-gpt-5-2",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "10ab1c39be149773",
+      "title": "Introducing GPT-5.2",
+      "content": "GPT-5.2 is our most advanced frontier model for everyday professional work, with state-of-the-art reasoning, long-context understanding, coding, and vision. Use it in ChatGPT and the OpenAI API to power faster, more reliable agentic workflows.",
+      "date": "Thu, 11 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/introducing-gpt-5-2",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "73e570ad8ee1a6eb",
+      "title": "Increasing revenue 300% by bringing AI to SMBs",
+      "content": "Discover how Podium used OpenAI\u2019s GPT-5 to build \u201cJerry,\u201d an AI teammate driving 300% growth and transforming how Main Street businesses serve customers.",
+      "date": "Thu, 11 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/podium",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "365d33ac3468160a",
+      "title": "Strengthening cyber resilience as AI capabilities advance",
+      "content": "OpenAI is investing in stronger safeguards and defensive capabilities as AI models become more powerful in cybersecurity. We explain how we assess risk, limit misuse, and work with the security community to strengthen cyber resilience.",
+      "date": "Wed, 10 Dec 2025 12:00:00 GMT",
+      "link": "https://openai.com/index/strengthening-cyber-resilience",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "083ba9e3ddeadaa0",
+      "title": "How Scout24 is building the next generation of real-estate search with AI",
+      "content": "Scout24 has created a GPT-5 powered conversational assistant that reimagines real-estate search, guiding users with clarifying questions, summaries, and tailored listing recommendations.",
+      "date": "Tue, 09 Dec 2025 16:00:00 GMT",
+      "link": "https://openai.com/index/scout24",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "fa276c020c3018fb",
+      "title": "OpenAI co-founds Agentic AI Foundation, donates AGENTS.md",
+      "content": "OpenAI co-founds the Agentic AI Foundation under the Linux Foundation and donates AGENTS.md to support open, interoperable standards for safe agentic AI.",
+      "date": "Tue, 09 Dec 2025 09:00:00 GMT",
+      "link": "https://openai.com/index/agentic-ai-foundation",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "1c98972dd7538ae2",
+      "title": "Launching our first OpenAI Certifications courses",
+      "content": "Learn how OpenAI\u2019s new certifications and AI Foundations courses help people build real-world AI skills, boost career opportunities, and prepare for the future of work.",
+      "date": "Tue, 09 Dec 2025 06:00:00 GMT",
+      "link": "https://openai.com/index/openai-certificate-courses",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "d2a0da8324dcb2e5",
+      "title": "Building AI fluency at scale with ChatGPT Enterprise",
+      "content": "Commonwealth Bank of Australia partners with OpenAI to roll out ChatGPT Enterprise to 50,000 employees, building AI fluency at scale to improve customer service and fraud response.",
+      "date": "Tue, 09 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/commonwealth-bank-of-australia",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "b0bfca7aae4b9f5b",
+      "title": "Bringing powerful AI to millions across Europe with Deutsche Telekom",
+      "content": "OpenAI is collaborating with Deutsche Telekom to bring advanced, multilingual AI experiences to millions of people across Europe. ChatGPT Enterprise will also be deployed to help employees at Deutsche Telekom improve workflows and accelerate innovation.",
+      "date": "Tue, 09 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/deutsche-telekom-collaboration",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "239b19875b6de52e",
+      "title": "OpenAI appoints Denise Dresser as Chief Revenue Officer",
+      "content": "Denise Dresser is joining as Chief Revenue Officer, overseeing OpenAI\u2019s global revenue strategy across enterprise and customer success. She will help more businesses put AI to work in their day-to-day operations as OpenAI continues to scale.",
+      "date": "Tue, 09 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/openai-appoints-denise-dresser",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "007b2c119143a8d7",
+      "title": "Instacart and OpenAI partner on AI shopping experiences",
+      "content": "OpenAI and Instacart are deepening their longstanding partnership by bringing the first fully integrated grocery shopping and Instant Checkout payment app to ChatGPT.",
+      "date": "Mon, 08 Dec 2025 06:00:00 GMT",
+      "link": "https://openai.com/index/instacart-partnership",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "48e9458551fc40d2",
+      "title": "The state of enterprise AI",
+      "content": "Key findings from OpenAI\u2019s enterprise data show accelerating AI adoption, deeper integration, and measurable productivity gains across industries in 2025.",
+      "date": "Mon, 08 Dec 2025 04:00:00 GMT",
+      "link": "https://openai.com/index/the-state-of-enterprise-ai-2025-report",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "279ad923876ae125",
+      "title": "How Virgin Atlantic uses AI to enhance every step of travel",
+      "content": "Virgin Atlantic CFO Oliver Byers shares how the airline is using AI to speed up development, improve decision-making, and elevate customer experience.",
+      "date": "Mon, 08 Dec 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/virgin-atlantic-oliver-byers",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "241f77b203d9900c",
+      "title": "Introducing OpenAI for Australia",
+      "content": "OpenAI is launching OpenAI for Australia to build sovereign AI infrastructure, upskill more than 1.5 million workers, and accelerate innovation across the country\u2019s growing AI ecosystem.",
+      "date": "Thu, 04 Dec 2025 19:00:00 GMT",
+      "link": "https://openai.com/global-affairs/openai-for-australia",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "cac309a5d5d8147a",
+      "title": "OpenAI to acquire Neptune",
+      "content": "OpenAI is acquiring Neptune to deepen visibility into model behavior and strengthen the tools researchers use to track experiments and monitor training.",
+      "date": "Wed, 03 Dec 2025 10:00:00 GMT",
+      "link": "https://openai.com/index/openai-to-acquire-neptune",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "f45c751a8120d4e1",
+      "title": "How confessions can keep language models honest",
+      "content": "OpenAI researchers are testing \u201cconfessions,\u201d a method that trains models to admit when they make mistakes or act undesirably, helping improve AI honesty, transparency, and trust in model outputs.",
+      "date": "Wed, 03 Dec 2025 10:00:00 GMT",
+      "link": "https://openai.com/index/how-confessions-can-keep-language-models-honest",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "86fb2e5f11412f83",
+      "title": "Announcing the initial People-First AI Fund grantees",
+      "content": "The OpenAI Foundation announces the initial recipients of the People-First AI Fund, awarding $40.5M in unrestricted grants to 208 nonprofits supporting community innovation and opportunity.",
+      "date": "Wed, 03 Dec 2025 08:00:00 GMT",
+      "link": "https://openai.com/index/people-first-ai-fund-grantees",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "946bf5413869bf93",
+      "title": "Inside Mirakl's agentic commerce vision",
+      "content": "Mirakl is redefining commerce through AI agents and ChatGPT Enterprise\u2014achieving faster documentation, smarter customer support, and building toward agent-native commerce with Mirakl Nexus.",
+      "date": "Mon, 01 Dec 2025 22:00:00 GMT",
+      "link": "https://openai.com/index/mirakl",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "cd2c685fc846718e",
+      "title": "Funding grants for new research into AI and mental health",
+      "content": "OpenAI is awarding up to $2 million in grants for research at the intersection of AI and mental health. The program supports projects that study real-world risks, benefits, and applications to improve safety and well-being.",
+      "date": "Mon, 01 Dec 2025 12:00:00 GMT",
+      "link": "https://openai.com/index/ai-mental-health-research-grants",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "18096a712e7fa8d9",
+      "title": "OpenAI and NORAD team up to bring new magic to \u201cNORAD Tracks Santa\u201d",
+      "content": "OpenAI and NORAD are bringing new magic to \u201cNORAD Tracks Santa\u201d with three ChatGPT holiday tools that let families create festive elves, toy coloring pages, and custom Christmas stories.",
+      "date": "Mon, 01 Dec 2025 06:00:00 GMT",
+      "link": "https://openai.com/index/norad-holiday-collaboration",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "eb796a07f31d6c3d",
+      "title": "OpenAI takes an ownership stake in Thrive Holdings to accelerate enterprise AI adoption",
+      "content": "OpenAI takes an ownership stake in Thrive Holdings to accelerate enterprise AI adoption, embedding frontier research and engineering directly into accounting and IT services to boost speed, accuracy, and efficiency while creating a scalable model for industry-wide transformation.",
+      "date": "Mon, 01 Dec 2025 05:00:00 GMT",
+      "link": "https://openai.com/index/thrive-holdings",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "15fd84c7f858b563",
+      "title": "Accenture and OpenAI accelerate enterprise AI success",
+      "content": "Accenture and OpenAI are collaborating to help enterprises bring agentic AI capabilities into the core of their business and unlock new levels of growth.",
+      "date": "Mon, 01 Dec 2025 05:00:00 GMT",
+      "link": "https://openai.com/index/accenture-partnership",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "ec9167a4ecbbee20",
+      "title": "Mixpanel security incident: what OpenAI users need to know",
+      "content": "OpenAI shares details about a Mixpanel security incident involving limited API analytics data. No API content, credentials, or payment details were exposed. Learn what happened and how we\u2019re protecting users.",
+      "date": "Wed, 26 Nov 2025 19:00:00 GMT",
+      "link": "https://openai.com/index/mixpanel-incident",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "292f631c6a64d1a1",
+      "title": "Expanding data residency access to business customers worldwide",
+      "content": "OpenAI expands data residency for ChatGPT Enterprise, ChatGPT Edu, and the API Platform, enabling eligible customers to store data at rest in-region.",
+      "date": "Tue, 25 Nov 2025 22:00:00 GMT",
+      "link": "https://openai.com/index/expanding-data-residency-access-to-business-customers-worldwide",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "d5537fbcae592b08",
+      "title": "Our approach to mental health-related litigation",
+      "content": "We\u2019re sharing our approach to mental health-related litigation. O handle sensitive cases with care, transparency, and respect while continuing to strengthen safety and support in ChatGPT.",
+      "date": "Tue, 25 Nov 2025 12:00:00 GMT",
+      "link": "https://openai.com/index/mental-health-litigation-approach",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "5f5dea04ed5fc342",
+      "title": "Inside JetBrains\u2014the company reshaping how the world writes code",
+      "content": "JetBrains is integrating GPT-5 across its coding tools, helping millions of developers design, reason, and build software faster.",
+      "date": "Tue, 25 Nov 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/jetbrains-2025",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "2cae3df5b44652a8",
+      "title": "GPT-5 and the future of mathematical discovery",
+      "content": "UCLA Professor Ernest Ryu and GPT-5 solved a key question in optimization theory, showcasing AI\u2019s role in accelerating mathematical discovery.",
+      "date": "Mon, 24 Nov 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/gpt-5-mathematical-discovery",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "8d601fb98b9e65cd",
+      "title": "Introducing shopping research in ChatGPT",
+      "content": "Shopping research in ChatGPT helps you explore, compare, and discover products with personalized buyer\u2019s guides that simplify decision-making",
+      "date": "Mon, 24 Nov 2025 00:00:00 GMT",
+      "link": "https://openai.com/index/chatgpt-shopping-research",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "77d49aac921aab5d",
+      "title": "OpenAI and Foxconn collaborate to strengthen U.S. manufacturing across the AI supply chain",
+      "content": "OpenAI and Foxconn are collaborating to design and manufacture next-generation AI infrastructure hardware in the U.S. The partnership will develop multiple generations of data-center systems, strengthen U.S. supply chains, and build key components domestically to accelerate advanced AI infrastructure.",
+      "date": "Thu, 20 Nov 2025 14:50:00 GMT",
+      "link": "https://openai.com/index/openai-and-foxconn-collaborate",
+      "source": "https://openai.com/news/rss.xml"
+    },
+    {
+      "id": "0d6323266542f19d",
+      "title": "Helping 1,000 small businesses build with AI",
+      "content": "OpenAI is partnering with DoorDash, SCORE, and local organizations to help 1,000 small businesses build with AI. The Small Business AI Jam gives Main Street business owners hands-on tools and training to compete and grow.",
+      "date": "Thu, 20 Nov 2025 06:00:00 GMT",
+      "link": "https://openai.com/index/small-business-ai-jam",
+      "source": "https://openai.com/news/rss.xml"
+    }
+  ],
+  "updated": "2025-12-22T19:43:30.242549"
+}
