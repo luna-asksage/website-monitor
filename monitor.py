@@ -66,7 +66,7 @@ class LLMClient:
     def __init__(self, config: dict):
         self.api_url = config.get('url', '')
         self.api_token = config.get('token', '')
-        self.model = config.get('model', 'google-gemini-2.5-pro')
+        self.model = config.get('model', 'google-claude-45-opus')
         self.temperature = config.get('temperature', 0.1)
     
     def query(self, prompt: str, max_tokens: int = 1000) -> Tuple[Optional[str], Optional[str]]:
@@ -109,18 +109,22 @@ class LLMClient:
             
             result = response.json()
             
-            # Extract response text - handle different response formats
+            # Extract response text - check 'message' FIRST (contains actual content)
+            # 'response' field just contains status like "OK"
             response_text = None
             if isinstance(result, dict):
-                response_text = result.get('response') or result.get('message') or result.get('text')
-                if response_text is None:
-                    # Try to find any string value
-                    for key, value in result.items():
-                        if isinstance(value, str) and len(value) > 10:
-                            response_text = value
-                            break
-                if response_text is None:
-                    response_text = json.dumps(result)
+                # Priority: message > text > other string fields
+                response_text = result.get('message')
+                
+                if not response_text or not response_text.strip():
+                    response_text = result.get('text')
+                
+                if not response_text or not response_text.strip():
+                    # Skip 'response' if it's just a status like "OK"
+                    resp_field = result.get('response', '')
+                    if resp_field and resp_field.upper() != 'OK':
+                        response_text = resp_field
+            
             elif isinstance(result, str):
                 response_text = result
             else:
@@ -128,7 +132,7 @@ class LLMClient:
             
             response_text = response_text.strip() if response_text else ""
             
-            logger.debug(f"LLM Response - Parsed: {response_text[:500]}...")
+            logger.debug(f"LLM Response - Parsed ({len(response_text)} chars): {response_text[:200]}...")
             
             if not response_text or len(response_text) < 3:
                 return None, f"Empty or very short response: '{response_text}'"
@@ -204,7 +208,7 @@ class WebsiteMonitor:
             "asksage_api": {
                 "url": "https://api.asksage.ai/server/query",
                 "token": "",
-                "model": "google-gemini-2.5-pro",
+                "model": "google-claude-45-opus",
                 "temperature": 0.1
             },
             "storage_dir": "storage"
