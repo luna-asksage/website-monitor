@@ -8,17 +8,17 @@ import os
 import json
 import hashlib
 import logging
-import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, asdict
+from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
 
-# Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Enable debug logging
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('monitor.log'),
@@ -28,53 +28,178 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class ContentItem:
+    """A single news/changelog item."""
+    id: str
+    title: str
+    description: str
+    date: str
+    link: str
+    source_name: str
+    full_content: Optional[str] = None
+    
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass 
+class HandledRelease:
+    """A release we've already created an issue for."""
+    id: str
+    title: str
+    link: str
+    issue_number: int
+    detected_at: str
+    
+    def to_dict(self) -> dict:
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'HandledRelease':
+        return cls(**data)
+
+
+class LLMClient:
+    """Handles all LLM API interactions with proper debugging."""
+    
+    def __init__(self, config: dict):
+        self.api_url = config.get('url', '')
+        self.api_token = config.get('token', '')
+        self.model = config.get('model', 'google-gemini-2.5-pro')
+        self.temperature = config.get('temperature', 0.1)
+    
+    def query(self, prompt: str, max_tokens: int = 1000) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Send a simple prompt to the LLM.
+        
+        Returns:
+            Tuple of (response_text, error_message)
+        """
+        if not self.api_token:
+            return None, "No API token configured"
+        
+        try:
+            # Log what we're sending
+            logger.debug(f"LLM Request - Model: {self.model}")
+            logger.debug(f"LLM Request - Prompt length: {len(prompt)} chars")
+            logger.debug(f"LLM Request - Prompt preview: {prompt[:500]}...")
+            
+            files = {
+                'model': (None, self.model),
+                'temperature': (None, str(self.temperature)),
+                'message': (None, json.dumps([{"user": "me", "message": prompt}])),
+                'system_prompt': (None, "You are a helpful assistant. Follow the instructions precisely."),
+                'dataset': (None, 'none'),
+                'usage': (None, 'True')
+            }
+            
+            response = requests.post(
+                self.api_url,
+                headers={'x-access-tokens': self.api_token},
+                files=files,
+                timeout=90
+            )
+            
+            # Log raw response
+            logger.debug(f"LLM Response - Status: {response.status_code}")
+            logger.debug(f"LLM Response - Raw: {response.text[:1000]}")
+            
+            response.raise_for_status()
+            
+            result = response.json()
+            
+            # Extract response text - handle different response formats
+            response_text = None
+            if isinstance(result, dict):
+                response_text = result.get('response') or result.get('message') or result.get('text')
+                if response_text is None:
+                    # Try to find any string value
+                    for key, value in result.items():
+                        if isinstance(value, str) and len(value) > 10:
+                            response_text = value
+                            break
+                if response_text is None:
+                    response_text = json.dumps(result)
+            elif isinstance(result, str):
+                response_text = result
+            else:
+                response_text = str(result)
+            
+            response_text = response_text.strip() if response_text else ""
+            
+            logger.debug(f"LLM Response - Parsed: {response_text[:500]}...")
+            
+            if not response_text or len(response_text) < 3:
+                return None, f"Empty or very short response: '{response_text}'"
+            
+            return response_text, None
+            
+        except requests.exceptions.Timeout:
+            return None, "Request timed out"
+        except requests.exceptions.RequestException as e:
+            return None, f"Request failed: {e}"
+        except json.JSONDecodeError as e:
+            return None, f"Invalid JSON response: {e}"
+        except Exception as e:
+            return None, f"Unexpected error: {e}"
+
+
 class WebsiteMonitor:
-    """Monitors websites for changes and creates GitHub Issues."""
+    """Monitors websites for AI product releases."""
     
     def __init__(self, config_path: str = "config.json"):
-        """Initialize the monitor with configuration."""
         self.config = self._load_config(config_path)
         self._override_with_env_vars()
+        
         self.storage_dir = Path(self.config.get("storage_dir", "storage"))
         self.storage_dir.mkdir(exist_ok=True)
         
-        # GitHub configuration
+        self.llm = LLMClient(self.config.get('asksage_api', {}))
+        
         self.github_token = os.getenv('GITHUB_TOKEN')
         self.github_repo = os.getenv('GITHUB_REPOSITORY')
         
-        # Track errors for reporting
-        self.errors = []
+        self.errors: List[str] = []
+        self.time_window_days = 7
+        self.max_items_per_source = 10
         
-        # Websites to monitor
+        # Browser-like session
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+        })
+        
         self.websites = {
             "openai": {
                 "url": "https://openai.com/news/rss.xml",
-                "name": "OpenAI Product Releases",
+                "name": "OpenAI",
                 "type": "rss",
-                "selectors": ["item"],
                 "emoji": "🔵",
-                "label": "openai"
-            },
-            "gemini": {
-                "url": "https://ai.google.dev/gemini-api/docs/changelog.md.txt",
-                "name": "Google Gemini API Changelog",
-                "type": "text",
-                "selectors": [],
-                "emoji": "🟡",
-                "label": "gemini"
+                "label": "openai",
+                "base_url": "https://openai.com"
             },
             "anthropic": {
                 "url": "https://www.anthropic.com/news",
-                "name": "Anthropic News",
-                "type": "html",
-                "selectors": ["main", "article", ".content"],
-                "emoji": "🟠",
-                "label": "anthropic"
-            }
+                "name": "Anthropic",
+                "type": "html_news",
+                "emoji": "🟠", 
+                "label": "anthropic",
+                "base_url": "https://www.anthropic.com"
+            },
+            "gemini": {
+                "url": "https://ai.google.dev/gemini-api/docs/changelog",
+                "name": "Google Gemini",
+                "type": "html_changelog",
+                "emoji": "🟡",
+                "label": "gemini",
+                "base_url": "https://ai.google.dev"
+            },
         }
     
     def _load_config(self, config_path: str) -> Dict:
-        """Load configuration from JSON file with fallback to defaults."""
         default_config = {
             "asksage_api": {
                 "url": "https://api.asksage.ai/server/query",
@@ -87,603 +212,642 @@ class WebsiteMonitor:
         
         try:
             with open(config_path, 'r') as f:
-                loaded_config = json.load(f)
+                loaded = json.load(f)
                 for key in default_config:
-                    if key in loaded_config:
+                    if key in loaded:
                         if isinstance(default_config[key], dict):
-                            default_config[key].update(loaded_config[key])
+                            default_config[key].update(loaded[key])
                         else:
-                            default_config[key] = loaded_config[key]
+                            default_config[key] = loaded[key]
                 return default_config
-        except FileNotFoundError:
-            logger.warning(f"Config file {config_path} not found, using defaults")
-            return default_config
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in config: {e}")
+        except Exception as e:
+            logger.warning(f"Config load error: {e}, using defaults")
             return default_config
     
     def _override_with_env_vars(self):
-        """Override config with environment variables if present."""
         if os.getenv('ASKSAGE_API_TOKEN'):
             self.config['asksage_api']['token'] = os.getenv('ASKSAGE_API_TOKEN')
-            logger.info("Using API token from environment variable")
+            logger.info("Using API token from environment")
     
-    def _normalize_content(self, content: str) -> str:
-        """
-        Normalize content to ignore insignificant changes.
-        
-        This removes:
-        - Extra whitespace
-        - Timestamps and dates
-        - Session IDs and tracking parameters
-        - Non-breaking spaces and special characters that might vary
-        """
-        # Replace non-breaking spaces and other Unicode spaces with regular spaces
-        content = re.sub(r'[\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000\uFEFF]', ' ', content)
-        
-        # Remove common dynamic elements
-        # Remove ISO timestamps
-        content = re.sub(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?', '', content)
-        
-        # Remove common date formats
-        content = re.sub(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}', '', content)
-        content = re.sub(r'\d{1,2}/\d{1,2}/\d{2,4}', '', content)
-        
-        # Remove time stamps
-        content = re.sub(r'\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM|am|pm)?', '', content)
-        
-        # Normalize whitespace
-        content = re.sub(r'\s+', ' ', content)
-        content = content.strip()
-        
-        # Remove any remaining problematic Unicode characters
-        content = content.encode('ascii', 'ignore').decode('ascii')
-        
-        return content
+    def _generate_id(self, *args) -> str:
+        combined = '|'.join(str(a).strip() for a in args if a)
+        return hashlib.sha256(combined.encode()).hexdigest()[:16]
     
-    def _fetch_rss_content(self, url: str) -> Optional[str]:
-        """
-        Fetch and parse RSS feed content.
-        
-        Args:
-            url: The RSS feed URL
-        
-        Returns:
-            Clean text content from RSS items or None if fetch fails
-        """
+    def _parse_date(self, date_str: str) -> Optional[datetime]:
+        if not date_str:
+            return None
         try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (compatible; AIMonitor/1.0)',
-            }
+            from dateutil import parser
+            dt = parser.parse(date_str, fuzzy=True)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            return None
+    
+    def _is_recent(self, date: Optional[datetime]) -> bool:
+        if not date:
+            return True
+        cutoff = datetime.now(timezone.utc) - timedelta(days=self.time_window_days)
+        return date >= cutoff
+    
+    # =========================================================================
+    # Content Extraction
+    # =========================================================================
+    
+    def _extract_rss(self, url: str, source_name: str) -> List[ContentItem]:
+        """Extract items from RSS feed."""
+        items = []
+        try:
+            resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.content, 'xml')
             
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
-            
-            soup = BeautifulSoup(response.content, 'xml')
-            
-            # Extract all items
-            items = soup.find_all('item')
-            
-            # Build content from items (title + description)
-            content_parts = []
-            for item in items:
+            for item in soup.find_all('item'):
                 title = item.find('title')
-                description = item.find('description')
-                pub_date = item.find('pubDate')
+                title = title.get_text(strip=True) if title else ""
                 
-                if title:
-                    content_parts.append(f"TITLE: {title.get_text(strip=True)}")
-                if description:
-                    # Parse HTML in description
-                    desc_soup = BeautifulSoup(description.get_text(), 'html.parser')
-                    desc_text = desc_soup.get_text(separator='\n', strip=True)
-                    content_parts.append(f"DESCRIPTION: {desc_text}")
-                if pub_date:
-                    content_parts.append(f"DATE: {pub_date.get_text(strip=True)}")
-                content_parts.append("---")
-            
-            content = '\n'.join(content_parts)
-            return self._normalize_content(content)
-            
-        except Exception as e:
-            logger.error(f"Failed to fetch RSS feed {url}: {e}")
-            self.errors.append(f"RSS fetch error for {url}: {str(e)}")
-            return None
-    
-    def _fetch_html_content(self, url: str, selectors: list) -> Optional[str]:
-        """
-        Fetch and extract clean text content from HTML website.
-        
-        Args:
-            url: The URL to fetch
-            selectors: List of CSS selectors to try (in order of preference)
-        
-        Returns:
-            Clean text content or None if fetch fails
-        """
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Cache-Control': 'max-age=0',
-            }
-            
-            response = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
-            response.raise_for_status()
-            
-            # Handle encoding properly
-            response.encoding = response.apparent_encoding or 'utf-8'
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Remove unwanted elements
-            for element in soup(["script", "style", "nav", "footer", "header", "aside", "iframe", "noscript"]):
-                element.decompose()
-            
-            # Try selectors in order
-            content = None
-            for selector in selectors:
-                try:
-                    element = soup.select_one(selector)
-                    if element:
-                        content = element.get_text(separator='\n', strip=True)
-                        break
-                except Exception:
+                link = item.find('link')
+                link = link.get_text(strip=True).rstrip(':') if link else ""
+                
+                desc = item.find('description')
+                description = ""
+                if desc:
+                    desc_soup = BeautifulSoup(desc.get_text(), 'html.parser')
+                    description = desc_soup.get_text(separator=' ', strip=True)
+                
+                date_el = item.find('pubDate')
+                date_str = date_el.get_text(strip=True) if date_el else ""
+                date = self._parse_date(date_str)
+                
+                if not self._is_recent(date):
                     continue
-            
-            # Fallback to body
-            if not content:
-                body = soup.body if soup.body else soup
-                content = body.get_text(separator='\n', strip=True)
-            
-            # Clean up whitespace
-            lines = [line.strip() for line in content.split('\n') if line.strip()]
-            content = '\n'.join(lines)
-            
-            # Normalize content to ignore insignificant changes
-            return self._normalize_content(content)
-            
-        except Exception as e:
-            logger.error(f"Failed to fetch HTML {url}: {e}")
-            self.errors.append(f"HTML fetch error for {url}: {str(e)}")
-            return None
-
-    def _fetch_text_content(self, url: str) -> Optional[str]:
-        """
-        Fetch plain text content from a URL.
-        
-        Args:
-            url: The URL to fetch
-        
-        Returns:
-            Clean text content or None if fetch fails
-        """
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (compatible; AIMonitor/1.0)',
-            }
-            
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
-            
-            # Handle encoding properly
-            response.encoding = response.apparent_encoding or 'utf-8'
-            
-            # Get the text content
-            content = response.text
-            
-            # Clean up whitespace while preserving structure
-            lines = [line.rstrip() for line in content.split('\n')]
-            content = '\n'.join(lines)
-            
-            # Normalize content to ignore insignificant changes
-            return self._normalize_content(content)
-            
-        except Exception as e:
-            logger.error(f"Failed to fetch text {url}: {e}")
-            self.errors.append(f"Text fetch error for {url}: {str(e)}")
-            return None
-
-    def _fetch_website_content(self, url: str, content_type: str, selectors: list) -> Optional[str]:
-        """
-        Fetch website content based on type.
-        
-        Args:
-            url: The URL to fetch
-            content_type: Type of content ('html', 'rss', 'text')
-            selectors: List of CSS selectors (for HTML/RSS)
-        
-        Returns:
-            Clean text content or None if fetch fails
-        """
-        if content_type == 'rss':
-            return self._fetch_rss_content(url)
-        elif content_type == 'text':
-            return self._fetch_text_content(url)
-        elif content_type == 'html':
-            return self._fetch_html_content(url, selectors)
-        else:
-            # Default to HTML
-            return self._fetch_html_content(url, selectors)
-    
-    def _get_content_hash(self, content: str) -> str:
-        """Generate SHA256 hash of content for change detection."""
-        return hashlib.sha256(content.encode('utf-8')).hexdigest()
-    
-    def _load_previous_content(self, site_key: str) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Load previous content and hash for a website.
-        
-        Returns:
-            Tuple of (content, hash) or (None, None) if no previous content exists
-        """
-        content_file = self.storage_dir / f"{site_key}_content.txt"
-        hash_file = self.storage_dir / f"{site_key}_hash.txt"
-        
-        try:
-            if content_file.exists() and hash_file.exists():
-                with open(content_file, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                with open(hash_file, 'r') as f:
-                    content_hash = f.read().strip()
-                return content, content_hash
-        except Exception as e:
-            logger.warning(f"Error loading previous content for {site_key}: {e}")
-        
-        return None, None
-    
-    def _save_content(self, site_key: str, content: str, content_hash: str):
-        """Save current content and hash to storage."""
-        try:
-            content_file = self.storage_dir / f"{site_key}_content.txt"
-            hash_file = self.storage_dir / f"{site_key}_hash.txt"
-            
-            with open(content_file, 'w', encoding='utf-8') as f:
-                f.write(content)
-            with open(hash_file, 'w') as f:
-                f.write(content_hash)
                 
-            logger.info(f"Saved content for {site_key}")
+                guid = item.find('guid')
+                item_id = self._generate_id(
+                    guid.get_text(strip=True) if guid else "", link, title
+                )
+                
+                items.append(ContentItem(
+                    id=item_id,
+                    title=title,
+                    description=description[:1500],
+                    date=date_str,
+                    link=link,
+                    source_name=source_name
+                ))
+            
+            logger.info(f"RSS: {len(items)} recent items from {source_name}")
+            
         except Exception as e:
-            logger.error(f"Error saving content for {site_key}: {e}")
+            logger.error(f"RSS extraction failed for {url}: {e}")
+            self.errors.append(f"RSS error ({source_name}): {e}")
+        
+        return items[:self.max_items_per_source]
     
-    def _analyze_with_llm(self, site_name: str, old_content: str, new_content: str) -> Optional[str]:
+    def _extract_anthropic_news(self, url: str, source_name: str, base_url: str) -> List[ContentItem]:
+        """Extract news from Anthropic's news page."""
+        items = []
+        try:
+            resp = self.session.get(url, timeout=30)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            logger.debug(f"Anthropic page: {len(resp.text)} chars")
+            
+            # Find article links - look for anchor tags that lead to news articles
+            seen_urls = set()
+            
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                
+                # Skip non-article links
+                if not href or href in ['/', '/news', '/news/']:
+                    continue
+                if href.startswith('#') or href.startswith('mailto:') or href.startswith('javascript:'):
+                    continue
+                
+                # Only process /news/ article links
+                if '/news/' not in href:
+                    continue
+                
+                # Resolve URL
+                full_url = urljoin(base_url, href)
+                
+                if full_url in seen_urls:
+                    continue
+                seen_urls.add(full_url)
+                
+                # Get title from link content
+                title = a.get_text(separator=' ', strip=True)
+                
+                # If link text is too short, try to find a heading nearby
+                if len(title) < 10:
+                    parent = a.find_parent(['article', 'div', 'li', 'section'])
+                    if parent:
+                        heading = parent.find(['h1', 'h2', 'h3', 'h4', 'h5'])
+                        if heading:
+                            title = heading.get_text(strip=True)
+                
+                if not title or len(title) < 5:
+                    continue
+                
+                # Look for description and date
+                description = ""
+                date_str = ""
+                parent = a.find_parent(['article', 'div', 'li', 'section'])
+                if parent:
+                    p = parent.find('p')
+                    if p:
+                        description = p.get_text(strip=True)
+                    time_el = parent.find('time')
+                    if time_el:
+                        date_str = time_el.get('datetime', '') or time_el.get_text(strip=True)
+                
+                items.append(ContentItem(
+                    id=self._generate_id(full_url),
+                    title=title[:200],
+                    description=description[:500],
+                    date=date_str,
+                    link=full_url,
+                    source_name=source_name
+                ))
+            
+            logger.info(f"Anthropic: {len(items)} news items extracted")
+            
+            # Debug: log first few items
+            for item in items[:3]:
+                logger.debug(f"  - {item.title[:60]}: {item.link}")
+            
+        except Exception as e:
+            logger.error(f"Anthropic extraction failed: {e}", exc_info=True)
+            self.errors.append(f"Anthropic error: {e}")
+        
+        return items[:self.max_items_per_source]
+    
+    def _extract_gemini_changelog(self, url: str, source_name: str) -> List[ContentItem]:
+        """Extract changelog entries from Gemini docs."""
+        items = []
+        try:
+            resp = self.session.get(url, timeout=30)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            import re
+            date_pattern = re.compile(
+                r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}',
+                re.IGNORECASE
+            )
+            
+            for heading in soup.find_all(['h2', 'h3']):
+                text = heading.get_text(strip=True)
+                
+                if not date_pattern.search(text):
+                    continue
+                
+                date = self._parse_date(text)
+                if not self._is_recent(date):
+                    continue
+                
+                # Get content until next heading
+                content_parts = []
+                sibling = heading.find_next_sibling()
+                while sibling and sibling.name not in ['h2', 'h3']:
+                    t = sibling.get_text(strip=True)
+                    if t:
+                        content_parts.append(t)
+                    sibling = sibling.find_next_sibling()
+                
+                content = ' '.join(content_parts)
+                
+                items.append(ContentItem(
+                    id=self._generate_id(text, content[:200]),
+                    title=text,
+                    description=content[:1500],
+                    date=text,
+                    link=url,
+                    source_name=source_name
+                ))
+            
+            logger.info(f"Gemini: {len(items)} changelog entries")
+            
+        except Exception as e:
+            logger.error(f"Gemini extraction failed: {e}")
+            self.errors.append(f"Gemini error: {e}")
+        
+        return items[:self.max_items_per_source]
+    
+    def _fetch_article_content(self, url: str, base_url: str) -> Optional[str]:
+        """Try to fetch full article content."""
+        if not url or not url.startswith('http'):
+            return None
+        
+        try:
+            headers = dict(self.session.headers)
+            headers['Referer'] = base_url
+            
+            resp = self.session.get(url, headers=headers, timeout=20)
+            if resp.status_code == 403:
+                logger.debug(f"403 for {url}")
+                return None
+            
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
+                tag.decompose()
+            
+            main = soup.find('main') or soup.find('article') or soup.body
+            if main:
+                return main.get_text(separator='\n', strip=True)[:8000]
+            
+        except Exception as e:
+            logger.debug(f"Could not fetch {url}: {e}")
+        
+        return None
+    
+    # =========================================================================
+    # Handled Releases
+    # =========================================================================
+    
+    def _load_handled(self) -> List[HandledRelease]:
+        db = self.storage_dir / "handled_releases.json"
+        try:
+            if db.exists():
+                with open(db) as f:
+                    data = json.load(f)
+                    return [HandledRelease.from_dict(r) for r in data.get('releases', [])]
+        except Exception as e:
+            logger.warning(f"Could not load handled releases: {e}")
+        return []
+    
+    def _save_handled(self, releases: List[HandledRelease]):
+        db = self.storage_dir / "handled_releases.json"
+        try:
+            # Keep only last 30 days
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            recent = []
+            for r in releases:
+                try:
+                    dt = datetime.fromisoformat(r.detected_at.replace('Z', '+00:00'))
+                    if dt >= cutoff:
+                        recent.append(r)
+                except:
+                    recent.append(r)
+            
+            with open(db, 'w') as f:
+                json.dump({
+                    'releases': [r.to_dict() for r in recent],
+                    'updated': datetime.now(timezone.utc).isoformat()
+                }, f, indent=2)
+        except Exception as e:
+            logger.error(f"Could not save handled releases: {e}")
+    
+    def _is_handled(self, item: ContentItem, handled: List[HandledRelease]) -> bool:
+        for h in handled:
+            if h.id == item.id or (h.link and item.link and h.link == item.link):
+                return True
+        return False
+    
+    # =========================================================================
+    # LLM Analysis - Simple, Focused Prompts
+    # =========================================================================
+    
+    def _analyze_item(self, item: ContentItem) -> Tuple[bool, str, str]:
         """
-        Use LLM to analyze changes and determine if notification is needed.
+        Analyze a single item to determine if it's a relevant release.
         
         Returns:
-            Summary of changes or None if no relevant changes detected
+            Tuple of (is_relevant, summary, issue_body)
         """
-        system_prompt = """You are an expert technical analyst monitoring AI product releases and API changes.
+        # Build the content we have
+        content = f"TITLE: {item.title}\n"
+        content += f"DATE: {item.date}\n" if item.date else ""
+        content += f"SOURCE: {item.source_name}\n"
+        content += f"LINK: {item.link}\n"
+        content += f"\nDESCRIPTION:\n{item.description}\n" if item.description else ""
+        
+        if item.full_content:
+            content += f"\nFULL ARTICLE CONTENT:\n{item.full_content}\n"
+        
+        logger.info(f"\n{'='*50}")
+        logger.info(f"Analyzing: {item.title}")
+        logger.info(f"Content length: {len(content)} chars")
+        
+        # =====================================================================
+        # QUERY 1: What is this article about?
+        # =====================================================================
+        
+        prompt1 = f"""Read the following article and tell me what it is announcing or discussing.
 
-Your task is to compare old and new website content and determine if there are any SIGNIFICANT product or API-related changes that developers should know about.
+{content}
 
-IMPORTANT: Only flag changes in these categories:
-- New AI models or model versions
-- Model pricing changes
-- New API features or capabilities
-- API or model deprecations or breaking changes
-- Significant model capability improvements
-- New SDKs or development tools
-- New API endpoints or parameters
+In 2-3 sentences, what is the main topic or announcement of this article? Be specific - mention any product names, model names, version numbers, or features discussed."""
 
-DO NOT flag:
-- Blog posts about general AI topics
-- Company news or partnerships (unless directly related to new products/APIs)
-- Minor documentation updates
-- Policy or research announcements
-- General website updates
-- UI/UX changes
+        response1, error1 = self.llm.query(prompt1)
+        
+        if error1:
+            logger.error(f"Query 1 failed: {error1}")
+            return False, "", ""
+        
+        logger.info(f"Query 1 response: {response1}")
+        
+        # =====================================================================
+        # QUERY 2: Is this a product/API release?
+        # =====================================================================
+        
+        prompt2 = f"""Based on this summary of an article from {item.source_name}:
 
-If you detect relevant changes, respond with a clear, concise summary in GitHub-flavored Markdown format.
+Title: {item.title}
+Summary: {response1}
 
-Start your response with:
+Is this article announcing or describing ANY of the following?
+1. A new AI model or new version of an existing model
+2. New API features, endpoints, or capabilities
+3. Pricing changes for AI models or APIs
+4. New SDKs, libraries, or developer tools
+5. Model deprecations or breaking API changes
+6. Significant capability improvements (context window, speed, multimodal support, etc.)
 
-### Summary
-Brief 1-2 sentence overview of what changed.
+Answer with EXACTLY this format:
+RELEVANT: YES or NO
+REASON: One sentence explaining your answer"""
 
-### Changes Detected
+        response2, error2 = self.llm.query(prompt2)
+        
+        if error2:
+            logger.error(f"Query 2 failed: {error2}")
+            return False, "", ""
+        
+        logger.info(f"Query 2 response: {response2}")
+        
+        # Parse the response
+        is_relevant = False
+        reason = response2
+        
+        response2_upper = response2.upper()
+        if 'RELEVANT: YES' in response2_upper or 'RELEVANT:YES' in response2_upper:
+            is_relevant = True
+        elif 'RELEVANT: NO' in response2_upper or 'RELEVANT:NO' in response2_upper:
+            is_relevant = False
+        elif response2_upper.startswith('YES'):
+            is_relevant = True
+        elif response2_upper.startswith('NO'):
+            is_relevant = False
+        else:
+            # If we can't parse, look for positive indicators
+            positive_indicators = ['new model', 'new version', 'announcing', 'releasing', 'launching', 'introduces', 'api update']
+            if any(ind in response2.lower() for ind in positive_indicators):
+                is_relevant = True
+        
+        # Extract reason
+        if 'REASON:' in response2.upper():
+            idx = response2.upper().index('REASON:')
+            reason = response2[idx + 7:].strip()
+        
+        if not is_relevant:
+            logger.info(f"Not relevant: {reason}")
+            return False, response1, ""
+        
+        logger.info(f"✓ RELEVANT: {reason}")
+        
+        # =====================================================================
+        # QUERY 3: Generate issue body (only for relevant items)
+        # =====================================================================
+        
+        prompt3 = f"""Create a GitHub issue body summarizing this AI product/API release.
 
-#### [Category Name]
-- **[Specific change]:** Brief description with details
-- **[Specific change]:** Brief description with details
+Title: {item.title}
+Source: {item.source_name}
+Link: {item.link}
+Summary: {response1}
 
-### Impact
-Brief note on who/what this affects and recommended actions.
+{f"Full content: {item.full_content[:5000]}" if item.full_content else f"Description: {item.description}"}
+
+Write a clear, concise summary in Markdown format including:
+- What was released/announced
+- Key features or changes
+- Technical details if available (model names, versions, capabilities, pricing)
+- Any action items for developers
+
+Keep it professional and focused on the facts."""
+
+        response3, error3 = self.llm.query(prompt3)
+        
+        if error3:
+            logger.error(f"Query 3 failed: {error3}")
+            # Use a fallback body
+            response3 = f"""### {item.title}
+
+**Summary:** {response1}
+
+**Source:** [{item.source_name}]({item.link})
+
+{item.description if item.description else 'See link for full details.'}"""
+        
+        return True, response1, response3
+    
+    # =========================================================================
+    # GitHub
+    # =========================================================================
+    
+    def _create_issue(self, site_info: dict, item: ContentItem, summary: str, body: str) -> Optional[int]:
+        if not self.github_token or not self.github_repo:
+            logger.error("GitHub not configured")
+            return None
+        
+        try:
+            title = f"{site_info['emoji']} {item.source_name}: {item.title[:70]}"
+            
+            full_body = f"""## New Release Detected
+
+**Source:** [{item.source_name}]({item.link})  
+**Detected:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
 
 ---
 
-If NO relevant changes are detected, respond with exactly: "None"
+{body}
 
-Be strict - only report changes that would impact developers using these AI products/APIs. Provide specific details like model names, feature names, dates when available."""
+---
 
-        user_message = f"""Website: {site_name}
+### Quick Summary
+{summary}
 
-I'm comparing two versions of this website's content. Analyze the differences and identify ONLY product/API changes as defined above.
+### Actions
+- [ ] Review the release
+- [ ] Update affected code/docs if needed
 
-=== PREVIOUS CONTENT (15000 chars max) ===
-{old_content[:15000]}
-
-=== CURRENT CONTENT (15000 chars max) ===
-{new_content[:15000]}
-
-=== END OF CONTENT ===
-
-Instructions:
-1. Compare the two versions carefully
-2. Identify what changed
-3. Determine if the changes are product/API-related (as defined above)
-4. If yes, provide a detailed summary in the format specified
-5. If no, respond with exactly "None"
-
-Your response:"""
-
-        try:
-            api_url = self.config['asksage_api']['url']
-            api_token = self.config['asksage_api']['token']
+*Auto-generated by AI Website Monitor*
+"""
             
-            if not api_token:
-                error_msg = "API token not configured"
-                logger.error(error_msg)
-                self.errors.append(error_msg)
-                return None
+            resp = requests.post(
+                f"https://api.github.com/repos/{self.github_repo}/issues",
+                headers={
+                    'Authorization': f'token {self.github_token}',
+                    'Accept': 'application/vnd.github.v3+json'
+                },
+                json={
+                    'title': title,
+                    'body': full_body,
+                    'labels': ['ai-release', site_info['label'], 'auto-close-7d']
+                },
+                timeout=30
+            )
+            resp.raise_for_status()
             
-            files = {
-                'model': (None, self.config['asksage_api']['model']),
-                'temperature': (None, str(self.config['asksage_api']['temperature'])),
-                'message': (None, json.dumps([{"user": "me", "message": user_message}])),
-                'system_prompt': (None, system_prompt),
-                'dataset': (None, 'none'),
-                'usage': (None, 'True')
-            }
+            issue = resp.json()
+            logger.info(f"✅ Created issue #{issue['number']}")
+            return issue['number']
             
-            headers = {
-                'x-access-tokens': api_token
-            }
-            
-            logger.info(f"Analyzing changes for {site_name} with LLM...")
-            response = requests.post(api_url, headers=headers, files=files, timeout=120)
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            # Extract the response text
-            if isinstance(result, dict):
-                response_text = result.get('response', result.get('message', str(result)))
-            else:
-                response_text = str(result)
-            
-            response_text = response_text.strip()
-            
-            # Log the full LLM response for debugging
-            logger.info(f"LLM response length: {len(response_text)} chars")
-            logger.debug(f"LLM response: {response_text[:500]}...")
-            
-            # Check if LLM detected changes
-            if response_text.lower() in ['none', 'false', 'no changes', 'no relevant changes', 'ok']:
-                logger.info(f"No relevant changes detected for {site_name}")
-                return None
-            
-            # Verify we got a real summary (not just "None" buried in text)
-            if len(response_text) < 20:
-                logger.warning(f"LLM response too short for {site_name}: {response_text}")
-                return None
-            
-            logger.info(f"Changes detected for {site_name}")
-            return response_text
-            
-        except requests.exceptions.RequestException as e:
-            error_msg = f"API request failed for {site_name}: {e}"
-            logger.error(error_msg)
-            self.errors.append(error_msg)
-            return None
         except Exception as e:
-            error_msg = f"Error analyzing changes for {site_name}: {e}"
-            logger.error(error_msg)
-            self.errors.append(error_msg)
+            logger.error(f"Issue creation failed: {e}")
+            self.errors.append(f"Issue creation: {e}")
             return None
     
-    def _create_github_issue(self, site_key: str, site_info: dict, summary: str):
-        """
-        Create a GitHub Issue for detected changes.
-        
-        Args:
-            site_key: The site identifier key
-            site_info: Site configuration dict
-            summary: LLM-generated summary of changes
-        """
+    def _close_old_issues(self):
         if not self.github_token or not self.github_repo:
-            logger.error("GitHub token or repository not configured")
             return
         
         try:
-            # Prepare issue content
-            title = f"{site_info['emoji']} {site_info['name']} - Updates Detected"
+            resp = requests.get(
+                f"https://api.github.com/repos/{self.github_repo}/issues",
+                headers={
+                    'Authorization': f'token {self.github_token}',
+                    'Accept': 'application/vnd.github.v3+json'
+                },
+                params={'labels': 'auto-close-7d', 'state': 'open'},
+                timeout=30
+            )
+            resp.raise_for_status()
             
-            body = f"""## {site_info['name']} - API/Product Changes Detected
-
-**Detection Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
-**Source:** {site_info['url']}
-
----
-
-{summary}
-
----
-
-### Actions
-- [ ] Review changes
-- [ ] Update any affected code/documentation
-- [ ] Close this issue when complete
-
----
-*This issue was automatically created by the AI Website Monitor*
-"""
-            
-            # Create issue via GitHub API
-            api_url = f"https://api.github.com/repos/{self.github_repo}/issues"
-            
-            headers = {
-                'Authorization': f'token {self.github_token}',
-                'Accept': 'application/vnd.github.v3+json'
-            }
-            
-            data = {
-                'title': title,
-                'body': body,
-                'labels': ['ai-update', site_info['label'], 'automated']
-            }
-            
-            response = requests.post(api_url, headers=headers, json=data, timeout=30)
-            response.raise_for_status()
-            
-            issue_data = response.json()
-            issue_number = issue_data['number']
-            issue_url = issue_data['html_url']
-            
-            logger.info(f"Created issue #{issue_number}: {issue_url}")
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to create GitHub issue: {e}")
+            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+            for issue in resp.json():
+                created = datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))
+                if created < cutoff:
+                    requests.patch(
+                        f"https://api.github.com/repos/{self.github_repo}/issues/{issue['number']}",
+                        headers={
+                            'Authorization': f'token {self.github_token}',
+                            'Accept': 'application/vnd.github.v3+json'
+                        },
+                        json={'state': 'closed'},
+                        timeout=30
+                    )
+                    logger.info(f"Auto-closed issue #{issue['number']}")
         except Exception as e:
-            logger.error(f"Error creating GitHub issue: {e}")
+            logger.warning(f"Close old issues error: {e}")
     
     def _create_error_issue(self):
-        """Create a GitHub Issue for errors encountered during monitoring."""
         if not self.errors or not self.github_token or not self.github_repo:
             return
         
         try:
-            title = "⚠️ Website Monitor - Errors Detected"
-            
-            error_list = '\n'.join([f"- {error}" for error in self.errors])
-            
-            body = f"""## Website Monitor Error Report
-
-**Detection Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
-
-The following errors occurred during the monitoring run:
-
-{error_list}
-
-### Recommended Actions
-- [ ] Check API credentials
-- [ ] Verify website URLs are accessible
-- [ ] Review error logs in workflow artifacts
-- [ ] Close this issue when resolved
-
----
-*This issue was automatically created by the AI Website Monitor*
-"""
-            
-            api_url = f"https://api.github.com/repos/{self.github_repo}/issues"
-            
-            headers = {
-                'Authorization': f'token {self.github_token}',
-                'Accept': 'application/vnd.github.v3+json'
-            }
-            
-            data = {
-                'title': title,
-                'body': body,
-                'labels': ['error', 'automated', 'monitor-health']
-            }
-            
-            response = requests.post(api_url, headers=headers, json=data, timeout=30)
-            response.raise_for_status()
-            
-            issue_data = response.json()
-            logger.info(f"Created error issue #{issue_data['number']}: {issue_data['html_url']}")
-            
+            requests.post(
+                f"https://api.github.com/repos/{self.github_repo}/issues",
+                headers={
+                    'Authorization': f'token {self.github_token}',
+                    'Accept': 'application/vnd.github.v3+json'
+                },
+                json={
+                    'title': '⚠️ Monitor Errors',
+                    'body': f"**Errors:**\n" + '\n'.join(f"- {e}" for e in self.errors),
+                    'labels': ['error']
+                },
+                timeout=30
+            )
         except Exception as e:
-            logger.error(f"Failed to create error issue: {e}")
+            logger.error(f"Error issue creation failed: {e}")
+    
+    # =========================================================================
+    # Main
+    # =========================================================================
     
     def check_all_websites(self):
-        """Main method to check all websites for changes."""
-        logger.info("="*60)
-        logger.info(f"Starting website check at {datetime.now()}")
-        logger.info("="*60)
+        logger.info("=" * 60)
+        logger.info(f"Monitor started: {datetime.now(timezone.utc)}")
+        logger.info("=" * 60)
+        
+        self._close_old_issues()
+        
+        handled = self._load_handled()
+        logger.info(f"Loaded {len(handled)} previously handled releases")
         
         issues_created = 0
         
         for site_key, site_info in self.websites.items():
-            logger.info(f"\nChecking {site_info['name']}...")
+            logger.info(f"\n{'='*50}")
+            logger.info(f"Processing: {site_info['name']}")
+            logger.info(f"{'='*50}")
             
-            # Fetch current content
-            current_content = self._fetch_website_content(
-                site_info['url'], 
-                site_info.get('type', 'html'),
-                site_info['selectors']
-            )
-            
-            if not current_content:
-                logger.warning(f"Failed to fetch content for {site_info['name']}, skipping...")
+            # Extract items
+            if site_info['type'] == 'rss':
+                items = self._extract_rss(site_info['url'], site_info['name'])
+            elif site_info['type'] == 'html_news':
+                items = self._extract_anthropic_news(
+                    site_info['url'], site_info['name'], site_info['base_url']
+                )
+            elif site_info['type'] == 'html_changelog':
+                items = self._extract_gemini_changelog(site_info['url'], site_info['name'])
+            else:
+                logger.warning(f"Unknown type: {site_info['type']}")
                 continue
             
-            # Calculate hash
-            current_hash = self._get_content_hash(current_content)
-            
-            # Load previous content
-            previous_content, previous_hash = self._load_previous_content(site_key)
-            
-            # Check if content changed
-            if previous_hash == current_hash:
-                logger.info(f"No changes detected for {site_info['name']}")
+            if not items:
+                logger.info(f"No items from {site_info['name']}")
                 continue
             
-            logger.info(f"Content changed for {site_info['name']}")
+            logger.info(f"Found {len(items)} items")
             
-            # If this is the first run, just save the content
-            if previous_content is None:
-                logger.info(f"First run for {site_info['name']}, saving baseline...")
-                self._save_content(site_key, current_content, current_hash)
-                continue
-            
-            # Analyze changes with LLM
-            summary = self._analyze_with_llm(site_info['name'], previous_content, current_content)
-            
-            if summary:
-                # Create GitHub Issue
-                self._create_github_issue(site_key, site_info, summary)
-                issues_created += 1
-            
-            # Save current content as new baseline
-            self._save_content(site_key, current_content, current_hash)
+            # Process each item
+            for item in items:
+                # Skip if already handled
+                if self._is_handled(item, handled):
+                    logger.info(f"Already handled: {item.title[:50]}")
+                    continue
+                
+                # Try to fetch full content (don't fail if we can't)
+                item.full_content = self._fetch_article_content(item.link, site_info['base_url'])
+                
+                # Analyze with LLM
+                is_relevant, summary, body = self._analyze_item(item)
+                
+                if not is_relevant:
+                    continue
+                
+                # Create issue
+                issue_num = self._create_issue(site_info, item, summary, body)
+                if issue_num:
+                    issues_created += 1
+                    handled.append(HandledRelease(
+                        id=item.id,
+                        title=item.title,
+                        link=item.link,
+                        issue_number=issue_num,
+                        detected_at=datetime.now(timezone.utc).isoformat()
+                    ))
         
-        # Create error issue if any errors occurred
+        self._save_handled(handled)
+        
         if self.errors:
-            logger.warning(f"\n⚠️  {len(self.errors)} error(s) occurred during monitoring")
+            logger.warning(f"⚠️ {len(self.errors)} errors occurred")
             self._create_error_issue()
         
-        # Summary
-        if issues_created > 0:
-            logger.info(f"\n✅ Created {issues_created} GitHub issue(s) for detected changes")
+        logger.info("=" * 60)
+        if issues_created:
+            logger.info(f"✅ Created {issues_created} issue(s)")
         else:
-            logger.info("\n✅ No relevant changes detected across all monitored websites")
-        
-        logger.info("="*60)
-        logger.info("Website check completed")
-        logger.info("="*60)
+            logger.info("✅ No new releases detected")
+        logger.info("=" * 60)
 
 
 def main():
-    """Main entry point for the script."""
     try:
         monitor = WebsiteMonitor()
         monitor.check_all_websites()
     except KeyboardInterrupt:
-        logger.info("Interrupted by user")
+        logger.info("Interrupted")
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
+        logger.error(f"Fatal: {e}", exc_info=True)
         raise
 
 
