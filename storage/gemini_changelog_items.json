@@ -1,0 +1,405 @@
+{
+  "items": [
+    {
+      "id": "da034ee9467ab7ac",
+      "title": "December 17, 2025",
+      "content": "December 17, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "91d9aee30bbc4497",
+      "title": "December 12, 2025",
+      "content": "December 12, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "74530584cec4589c",
+      "title": "December 11, 2025",
+      "content": "December 11, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "6d96145a2cba728a",
+      "title": "December 10, 2025",
+      "content": "December 10, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "d0c73c324107d14d",
+      "title": "December 9, 2025",
+      "content": "December 9, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "52b8820da67b2d7a",
+      "title": "December 5, 2025",
+      "content": "December 5, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "a1dd5679f84e1a4b",
+      "title": "December 4, 2025",
+      "content": "December 4, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "2198ba5d06906dac",
+      "title": "December 3, 2025",
+      "content": "December 3, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "73e9038ab55b688c",
+      "title": "November 20, 2025",
+      "content": "November 20, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "52a14fb52d29639d",
+      "title": "November 18, 2025",
+      "content": "November 18, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "5ee3cc1ed18ba67f",
+      "title": "November 11, 2025",
+      "content": "November 11, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "9e52648f1eadcef7",
+      "title": "November 10, 2025",
+      "content": "November 10, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "4fc618964235f66f",
+      "title": "November 6, 2025",
+      "content": "November 6, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "5147e82348465ec5",
+      "title": "November 4, 2025",
+      "content": "November 4, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "87a9690cb430260f",
+      "title": "October 29, 2025",
+      "content": "October 29, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "f26c1089d7f1d8b7",
+      "title": "October 20, 2025",
+      "content": "October 20, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "fa8ebac3ebeabbc1",
+      "title": "October 17, 2025",
+      "content": "October 17, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "1dfd7680fb3a4570",
+      "title": "October 15, 2025",
+      "content": "October 15, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "fe27b416857b2fe0",
+      "title": "October 7, 2025",
+      "content": "October 7, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "af65fd663650612d",
+      "title": "October 2, 2025",
+      "content": "October 2, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "930cc833da3bf770",
+      "title": "September 29, 2025",
+      "content": "September 29, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "de62abaca2c15bb3",
+      "title": "September 25, 2025",
+      "content": "September 25, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "13e9b61c1543dd2d",
+      "title": "September 23, 2025",
+      "content": "September 23, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "63f49bf7b58bac16",
+      "title": "September 16, 2025",
+      "content": "September 16, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "c052d9a1d5f24771",
+      "title": "September 10, 2025",
+      "content": "September 10, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "ea4f71490d23148f",
+      "title": "September 9, 2025",
+      "content": "September 9, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "4f1420d5d022d495",
+      "title": "August 26, 2025",
+      "content": "August 26, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "13d459b9d4368778",
+      "title": "August 18, 2025",
+      "content": "August 18, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "df1ed604d869ead2",
+      "title": "August 14, 2025",
+      "content": "August 14, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "4d1adeb2e8608b06",
+      "title": "August 7, 2025",
+      "content": "August 7, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "dd6c8d54875f58ec",
+      "title": "July 31, 2025",
+      "content": "July 31, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "af3796f26acb6ca4",
+      "title": "July 22, 2025",
+      "content": "July 22, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "90c760c0117a447a",
+      "title": "July 17, 2025",
+      "content": "July 17, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "f9b253354724505d",
+      "title": "July 14, 2025",
+      "content": "July 14, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "f72f021badb2581f",
+      "title": "July 7, 2025",
+      "content": "July 7, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "204aa71866641add",
+      "title": "June 26, 2025",
+      "content": "June 26, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "bb0a871c8315b9ad",
+      "title": "June 24, 2025",
+      "content": "June 24, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "9c5e9dfdb4f27231",
+      "title": "June 17, 2025",
+      "content": "June 17, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "15003480a60cfaa6",
+      "title": "June 05, 2025",
+      "content": "June 05, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "7c55e3e02b26c76e",
+      "title": "May 27, 2025",
+      "content": "May 27, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "578f19f54effc50c",
+      "title": "May 20, 2025",
+      "content": "May 20, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "8ae2ac9a6dbcbf2d",
+      "title": "May 7, 2025",
+      "content": "May 7, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "5e4e4fa55cce1407",
+      "title": "May 6, 2025",
+      "content": "May 6, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "e3aa17053bddd796",
+      "title": "April 17, 2025",
+      "content": "April 17, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "61dc8d8b38e562b7",
+      "title": "April 16, 2025",
+      "content": "April 16, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "9daaa7490794efcb",
+      "title": "April 9, 2025",
+      "content": "April 9, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "f9328a5185db0aee",
+      "title": "April 4, 2025",
+      "content": "April 4, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "3c614f8ec59efdcc",
+      "title": "March 25, 2025",
+      "content": "March 25, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "04ed141638a475f0",
+      "title": "March 12, 2025",
+      "content": "March 12, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    },
+    {
+      "id": "bb4a7ff01a8fb034",
+      "title": "March 11, 2025",
+      "content": "March 11, 2025",
+      "date": "",
+      "link": "",
+      "source": "https://ai.google.dev/gemini-api/docs/changelog"
+    }
+  ],
+  "updated": "2025-12-22T19:43:30.897344"
+}
