@@ -1,7 +1,7 @@
 {
   "asksage_api": {
     "url": "https://api.asksage.ai/server/query",
-    "model": "google-claude-45-sonnet",
+    "model": "google-claude-45-opus",
     "temperature": 0.2
   },
   "storage_dir": "storage"
