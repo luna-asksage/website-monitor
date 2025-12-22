@@ -13,12 +13,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from urllib.parse import urljoin
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from bs4 import BeautifulSoup
 
 
 logging.basicConfig(
-    level=logging.DEBUG,  # Enable debug logging
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('monitor.log'),
@@ -61,17 +62,17 @@ class HandledRelease:
 
 
 class LLMClient:
-    """Handles all LLM API interactions with proper debugging."""
+    """Handles all LLM API interactions."""
     
     def __init__(self, config: dict):
         self.api_url = config.get('url', '')
         self.api_token = config.get('token', '')
-        self.model = config.get('model', 'google-claude-45-opus')
+        self.model = config.get('model', 'google-gemini-2.5-pro')
         self.temperature = config.get('temperature', 0.1)
     
-    def query(self, prompt: str, max_tokens: int = 1000) -> Tuple[Optional[str], Optional[str]]:
+    def query(self, prompt: str) -> Tuple[Optional[str], Optional[str]]:
         """
-        Send a simple prompt to the LLM.
+        Send a prompt to the LLM.
         
         Returns:
             Tuple of (response_text, error_message)
@@ -80,11 +81,6 @@ class LLMClient:
             return None, "No API token configured"
         
         try:
-            # Log what we're sending
-            logger.debug(f"LLM Request - Model: {self.model}")
-            logger.debug(f"LLM Request - Prompt length: {len(prompt)} chars")
-            logger.debug(f"LLM Request - Prompt preview: {prompt[:500]}...")
-            
             files = {
                 'model': (None, self.model),
                 'temperature': (None, str(self.temperature)),
@@ -100,31 +96,23 @@ class LLMClient:
                 files=files,
                 timeout=90
             )
-            
-            # Log raw response
-            logger.debug(f"LLM Response - Status: {response.status_code}")
-            logger.debug(f"LLM Response - Raw: {response.text[:1000]}")
-            
             response.raise_for_status()
             
             result = response.json()
             
-            # Extract response text - check 'message' FIRST (contains actual content)
-            # 'response' field just contains status like "OK"
+            # Extract from 'message' field (contains actual LLM response)
             response_text = None
             if isinstance(result, dict):
-                # Priority: message > text > other string fields
                 response_text = result.get('message')
                 
                 if not response_text or not response_text.strip():
                     response_text = result.get('text')
                 
                 if not response_text or not response_text.strip():
-                    # Skip 'response' if it's just a status like "OK"
                     resp_field = result.get('response', '')
-                    if resp_field and resp_field.upper() != 'OK':
+                    if resp_field and resp_field.upper() not in ['OK', 'SUCCESS', 'ERROR']:
                         response_text = resp_field
-            
+                        
             elif isinstance(result, str):
                 response_text = result
             else:
@@ -132,10 +120,8 @@ class LLMClient:
             
             response_text = response_text.strip() if response_text else ""
             
-            logger.debug(f"LLM Response - Parsed ({len(response_text)} chars): {response_text[:200]}...")
-            
-            if not response_text or len(response_text) < 3:
-                return None, f"Empty or very short response: '{response_text}'"
+            if not response_text:
+                return None, "Empty response from API"
             
             return response_text, None
             
@@ -143,8 +129,6 @@ class LLMClient:
             return None, "Request timed out"
         except requests.exceptions.RequestException as e:
             return None, f"Request failed: {e}"
-        except json.JSONDecodeError as e:
-            return None, f"Invalid JSON response: {e}"
         except Exception as e:
             return None, f"Unexpected error: {e}"
 
@@ -165,8 +149,14 @@ class WebsiteMonitor:
         self.github_repo = os.getenv('GITHUB_REPOSITORY')
         
         self.errors: List[str] = []
+        
+        # Limits: 7 days OR 10 items, whichever comes first
         self.time_window_days = 7
         self.max_items_per_source = 10
+        
+        # Parallelization settings
+        self.max_fetch_workers = 5
+        self.max_llm_workers = 3
         
         # Browser-like session
         self.session = requests.Session()
@@ -260,7 +250,7 @@ class WebsiteMonitor:
     # =========================================================================
     
     def _extract_rss(self, url: str, source_name: str) -> List[ContentItem]:
-        """Extract items from RSS feed."""
+        """Extract items from RSS feed (max 10, within 7 days)."""
         items = []
         try:
             resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
@@ -268,6 +258,10 @@ class WebsiteMonitor:
             soup = BeautifulSoup(resp.content, 'xml')
             
             for item in soup.find_all('item'):
+                # Stop if we hit max items
+                if len(items) >= self.max_items_per_source:
+                    break
+                
                 title = item.find('title')
                 title = title.get_text(strip=True) if title else ""
                 
@@ -284,6 +278,7 @@ class WebsiteMonitor:
                 date_str = date_el.get_text(strip=True) if date_el else ""
                 date = self._parse_date(date_str)
                 
+                # Skip if outside time window
                 if not self._is_recent(date):
                     continue
                 
@@ -301,13 +296,13 @@ class WebsiteMonitor:
                     source_name=source_name
                 ))
             
-            logger.info(f"RSS: {len(items)} recent items from {source_name}")
+            logger.info(f"RSS: {len(items)} items from {source_name} (limit: {self.max_items_per_source}, window: {self.time_window_days}d)")
             
         except Exception as e:
             logger.error(f"RSS extraction failed for {url}: {e}")
             self.errors.append(f"RSS error ({source_name}): {e}")
         
-        return items[:self.max_items_per_source]
+        return items
     
     def _extract_anthropic_news(self, url: str, source_name: str, base_url: str) -> List[ContentItem]:
         """Extract news from Anthropic's news page."""
@@ -317,35 +312,29 @@ class WebsiteMonitor:
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, 'html.parser')
             
-            logger.debug(f"Anthropic page: {len(resp.text)} chars")
-            
-            # Find article links - look for anchor tags that lead to news articles
             seen_urls = set()
             
             for a in soup.find_all('a', href=True):
+                if len(items) >= self.max_items_per_source:
+                    break
+                
                 href = a['href']
                 
-                # Skip non-article links
                 if not href or href in ['/', '/news', '/news/']:
                     continue
-                if href.startswith('#') or href.startswith('mailto:') or href.startswith('javascript:'):
+                if href.startswith('#') or href.startswith('mailto:'):
                     continue
-                
-                # Only process /news/ article links
                 if '/news/' not in href:
                     continue
                 
-                # Resolve URL
                 full_url = urljoin(base_url, href)
                 
                 if full_url in seen_urls:
                     continue
                 seen_urls.add(full_url)
                 
-                # Get title from link content
                 title = a.get_text(separator=' ', strip=True)
                 
-                # If link text is too short, try to find a heading nearby
                 if len(title) < 10:
                     parent = a.find_parent(['article', 'div', 'li', 'section'])
                     if parent:
@@ -356,7 +345,6 @@ class WebsiteMonitor:
                 if not title or len(title) < 5:
                     continue
                 
-                # Look for description and date
                 description = ""
                 date_str = ""
                 parent = a.find_parent(['article', 'div', 'li', 'section'])
@@ -368,6 +356,11 @@ class WebsiteMonitor:
                     if time_el:
                         date_str = time_el.get('datetime', '') or time_el.get_text(strip=True)
                 
+                # Check if within time window
+                date = self._parse_date(date_str)
+                if not self._is_recent(date):
+                    continue
+                
                 items.append(ContentItem(
                     id=self._generate_id(full_url),
                     title=title[:200],
@@ -377,17 +370,13 @@ class WebsiteMonitor:
                     source_name=source_name
                 ))
             
-            logger.info(f"Anthropic: {len(items)} news items extracted")
-            
-            # Debug: log first few items
-            for item in items[:3]:
-                logger.debug(f"  - {item.title[:60]}: {item.link}")
+            logger.info(f"Anthropic: {len(items)} items (limit: {self.max_items_per_source}, window: {self.time_window_days}d)")
             
         except Exception as e:
-            logger.error(f"Anthropic extraction failed: {e}", exc_info=True)
+            logger.error(f"Anthropic extraction failed: {e}")
             self.errors.append(f"Anthropic error: {e}")
         
-        return items[:self.max_items_per_source]
+        return items
     
     def _extract_gemini_changelog(self, url: str, source_name: str) -> List[ContentItem]:
         """Extract changelog entries from Gemini docs."""
@@ -404,6 +393,9 @@ class WebsiteMonitor:
             )
             
             for heading in soup.find_all(['h2', 'h3']):
+                if len(items) >= self.max_items_per_source:
+                    break
+                
                 text = heading.get_text(strip=True)
                 
                 if not date_pattern.search(text):
@@ -413,7 +405,6 @@ class WebsiteMonitor:
                 if not self._is_recent(date):
                     continue
                 
-                # Get content until next heading
                 content_parts = []
                 sibling = heading.find_next_sibling()
                 while sibling and sibling.name not in ['h2', 'h3']:
@@ -433,13 +424,13 @@ class WebsiteMonitor:
                     source_name=source_name
                 ))
             
-            logger.info(f"Gemini: {len(items)} changelog entries")
+            logger.info(f"Gemini: {len(items)} items (limit: {self.max_items_per_source}, window: {self.time_window_days}d)")
             
         except Exception as e:
             logger.error(f"Gemini extraction failed: {e}")
             self.errors.append(f"Gemini error: {e}")
         
-        return items[:self.max_items_per_source]
+        return items
     
     def _fetch_article_content(self, url: str, base_url: str) -> Optional[str]:
         """Try to fetch full article content."""
@@ -450,9 +441,8 @@ class WebsiteMonitor:
             headers = dict(self.session.headers)
             headers['Referer'] = base_url
             
-            resp = self.session.get(url, headers=headers, timeout=20)
+            resp = self.session.get(url, headers=headers, timeout=15)
             if resp.status_code == 403:
-                logger.debug(f"403 for {url}")
                 return None
             
             resp.raise_for_status()
@@ -465,10 +455,30 @@ class WebsiteMonitor:
             if main:
                 return main.get_text(separator='\n', strip=True)[:8000]
             
-        except Exception as e:
-            logger.debug(f"Could not fetch {url}: {e}")
+        except Exception:
+            pass
         
         return None
+    
+    def _fetch_articles_parallel(self, items: List[ContentItem], base_url: str) -> List[ContentItem]:
+        """Fetch article content for multiple items in parallel."""
+        if not items:
+            return items
+        
+        def fetch_one(item: ContentItem) -> ContentItem:
+            if item.link:
+                item.full_content = self._fetch_article_content(item.link, base_url)
+            return item
+        
+        logger.info(f"Fetching {len(items)} articles in parallel (max {self.max_fetch_workers} workers)...")
+        
+        with ThreadPoolExecutor(max_workers=self.max_fetch_workers) as executor:
+            results = list(executor.map(fetch_one, items))
+        
+        fetched_count = sum(1 for item in results if item.full_content)
+        logger.info(f"Fetched content for {fetched_count}/{len(items)} articles")
+        
+        return results
     
     # =========================================================================
     # Handled Releases
@@ -488,8 +498,8 @@ class WebsiteMonitor:
     def _save_handled(self, releases: List[HandledRelease]):
         db = self.storage_dir / "handled_releases.json"
         try:
-            # Keep only last 30 days
-            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            # Keep only last 10 days
+            cutoff = datetime.now(timezone.utc) - timedelta(days=10)
             recent = []
             for r in releases:
                 try:
@@ -514,7 +524,7 @@ class WebsiteMonitor:
         return False
     
     # =========================================================================
-    # LLM Analysis - Simple, Focused Prompts
+    # LLM Analysis
     # =========================================================================
     
     def _analyze_item(self, item: ContentItem) -> Tuple[bool, str, str]:
@@ -524,7 +534,6 @@ class WebsiteMonitor:
         Returns:
             Tuple of (is_relevant, summary, issue_body)
         """
-        # Build the content we have
         content = f"TITLE: {item.title}\n"
         content += f"DATE: {item.date}\n" if item.date else ""
         content += f"SOURCE: {item.source_name}\n"
@@ -534,14 +543,7 @@ class WebsiteMonitor:
         if item.full_content:
             content += f"\nFULL ARTICLE CONTENT:\n{item.full_content}\n"
         
-        logger.info(f"\n{'='*50}")
-        logger.info(f"Analyzing: {item.title}")
-        logger.info(f"Content length: {len(content)} chars")
-        
-        # =====================================================================
-        # QUERY 1: What is this article about?
-        # =====================================================================
-        
+        # Query 1: Summarize
         prompt1 = f"""Read the following article and tell me what it is announcing or discussing.
 
 {content}
@@ -551,15 +553,12 @@ In 2-3 sentences, what is the main topic or announcement of this article? Be spe
         response1, error1 = self.llm.query(prompt1)
         
         if error1:
-            logger.error(f"Query 1 failed: {error1}")
+            logger.error(f"Query 1 failed for {item.title[:40]}: {error1}")
             return False, "", ""
         
-        logger.info(f"Query 1 response: {response1}")
+        logger.info(f"Summary: {response1[:100]}...")
         
-        # =====================================================================
-        # QUERY 2: Is this a product/API release?
-        # =====================================================================
-        
+        # Query 2: Classify
         prompt2 = f"""Based on this summary of an article from {item.source_name}:
 
 Title: {item.title}
@@ -580,45 +579,30 @@ REASON: One sentence explaining your answer"""
         response2, error2 = self.llm.query(prompt2)
         
         if error2:
-            logger.error(f"Query 2 failed: {error2}")
+            logger.error(f"Query 2 failed for {item.title[:40]}: {error2}")
             return False, "", ""
         
-        logger.info(f"Query 2 response: {response2}")
-        
-        # Parse the response
+        # Parse response
         is_relevant = False
         reason = response2
         
         response2_upper = response2.upper()
         if 'RELEVANT: YES' in response2_upper or 'RELEVANT:YES' in response2_upper:
             is_relevant = True
-        elif 'RELEVANT: NO' in response2_upper or 'RELEVANT:NO' in response2_upper:
-            is_relevant = False
-        elif response2_upper.startswith('YES'):
+        elif response2_upper.strip().startswith('YES'):
             is_relevant = True
-        elif response2_upper.startswith('NO'):
-            is_relevant = False
-        else:
-            # If we can't parse, look for positive indicators
-            positive_indicators = ['new model', 'new version', 'announcing', 'releasing', 'launching', 'introduces', 'api update']
-            if any(ind in response2.lower() for ind in positive_indicators):
-                is_relevant = True
         
-        # Extract reason
         if 'REASON:' in response2.upper():
             idx = response2.upper().index('REASON:')
             reason = response2[idx + 7:].strip()
         
         if not is_relevant:
-            logger.info(f"Not relevant: {reason}")
+            logger.info(f"Not relevant: {item.title[:40]}... - {reason[:50]}")
             return False, response1, ""
         
-        logger.info(f"✓ RELEVANT: {reason}")
+        logger.info(f"✓ RELEVANT: {item.title[:40]}... - {reason[:50]}")
         
-        # =====================================================================
-        # QUERY 3: Generate issue body (only for relevant items)
-        # =====================================================================
-        
+        # Query 3: Generate issue body
         prompt3 = f"""Create a GitHub issue body summarizing this AI product/API release.
 
 Title: {item.title}
@@ -639,8 +623,7 @@ Keep it professional and focused on the facts."""
         response3, error3 = self.llm.query(prompt3)
         
         if error3:
-            logger.error(f"Query 3 failed: {error3}")
-            # Use a fallback body
+            logger.error(f"Query 3 failed for {item.title[:40]}: {error3}")
             response3 = f"""### {item.title}
 
 **Summary:** {response1}
@@ -650,6 +633,37 @@ Keep it professional and focused on the facts."""
 {item.description if item.description else 'See link for full details.'}"""
         
         return True, response1, response3
+    
+    def _analyze_items_parallel(self, items: List[ContentItem], 
+                                 handled: List[HandledRelease]) -> List[Tuple[ContentItem, str, str]]:
+        """Analyze multiple items in parallel."""
+        # Filter out already handled items first
+        to_analyze = [item for item in items if not self._is_handled(item, handled)]
+        
+        if not to_analyze:
+            return []
+        
+        logger.info(f"Analyzing {len(to_analyze)} items in parallel (max {self.max_llm_workers} workers)...")
+        
+        results = []
+        
+        with ThreadPoolExecutor(max_workers=self.max_llm_workers) as executor:
+            future_to_item = {
+                executor.submit(self._analyze_item, item): item 
+                for item in to_analyze
+            }
+            
+            for future in as_completed(future_to_item):
+                item = future_to_item[future]
+                try:
+                    is_relevant, summary, body = future.result()
+                    if is_relevant:
+                        results.append((item, summary, body))
+                except Exception as e:
+                    logger.error(f"Analysis failed for {item.title[:40]}: {e}")
+        
+        logger.info(f"Found {len(results)} relevant items")
+        return results
     
     # =========================================================================
     # GitHub
@@ -766,9 +780,49 @@ Keep it professional and focused on the facts."""
     # Main
     # =========================================================================
     
+    def _process_site(self, site_key: str, site_info: dict, 
+                       handled: List[HandledRelease]) -> List[Tuple[ContentItem, str, str]]:
+        """Process a single site: extract, fetch articles, analyze."""
+        logger.info(f"\n{'='*50}")
+        logger.info(f"Processing: {site_info['name']}")
+        logger.info(f"{'='*50}")
+        
+        # Extract items (respects 7 day / 10 item limits)
+        if site_info['type'] == 'rss':
+            items = self._extract_rss(site_info['url'], site_info['name'])
+        elif site_info['type'] == 'html_news':
+            items = self._extract_anthropic_news(
+                site_info['url'], site_info['name'], site_info['base_url']
+            )
+        elif site_info['type'] == 'html_changelog':
+            items = self._extract_gemini_changelog(site_info['url'], site_info['name'])
+        else:
+            logger.warning(f"Unknown type: {site_info['type']}")
+            return []
+        
+        if not items:
+            logger.info(f"No items from {site_info['name']}")
+            return []
+        
+        # Filter out already handled
+        new_items = [item for item in items if not self._is_handled(item, handled)]
+        logger.info(f"Found {len(items)} items, {len(new_items)} are new")
+        
+        if not new_items:
+            return []
+        
+        # Fetch article content in parallel
+        new_items = self._fetch_articles_parallel(new_items, site_info['base_url'])
+        
+        # Analyze items in parallel
+        results = self._analyze_items_parallel(new_items, handled)
+        
+        return results
+    
     def check_all_websites(self):
         logger.info("=" * 60)
         logger.info(f"Monitor started: {datetime.now(timezone.utc)}")
+        logger.info(f"Limits: {self.time_window_days} days OR {self.max_items_per_source} items per source")
         logger.info("=" * 60)
         
         self._close_old_issues()
@@ -776,59 +830,38 @@ Keep it professional and focused on the facts."""
         handled = self._load_handled()
         logger.info(f"Loaded {len(handled)} previously handled releases")
         
-        issues_created = 0
+        # Process all sites in parallel
+        all_results: List[Tuple[str, dict, ContentItem, str, str]] = []
         
-        for site_key, site_info in self.websites.items():
-            logger.info(f"\n{'='*50}")
-            logger.info(f"Processing: {site_info['name']}")
-            logger.info(f"{'='*50}")
+        with ThreadPoolExecutor(max_workers=len(self.websites)) as executor:
+            future_to_site = {
+                executor.submit(self._process_site, key, info, handled): (key, info)
+                for key, info in self.websites.items()
+            }
             
-            # Extract items
-            if site_info['type'] == 'rss':
-                items = self._extract_rss(site_info['url'], site_info['name'])
-            elif site_info['type'] == 'html_news':
-                items = self._extract_anthropic_news(
-                    site_info['url'], site_info['name'], site_info['base_url']
-                )
-            elif site_info['type'] == 'html_changelog':
-                items = self._extract_gemini_changelog(site_info['url'], site_info['name'])
-            else:
-                logger.warning(f"Unknown type: {site_info['type']}")
-                continue
-            
-            if not items:
-                logger.info(f"No items from {site_info['name']}")
-                continue
-            
-            logger.info(f"Found {len(items)} items")
-            
-            # Process each item
-            for item in items:
-                # Skip if already handled
-                if self._is_handled(item, handled):
-                    logger.info(f"Already handled: {item.title[:50]}")
-                    continue
-                
-                # Try to fetch full content (don't fail if we can't)
-                item.full_content = self._fetch_article_content(item.link, site_info['base_url'])
-                
-                # Analyze with LLM
-                is_relevant, summary, body = self._analyze_item(item)
-                
-                if not is_relevant:
-                    continue
-                
-                # Create issue
-                issue_num = self._create_issue(site_info, item, summary, body)
-                if issue_num:
-                    issues_created += 1
-                    handled.append(HandledRelease(
-                        id=item.id,
-                        title=item.title,
-                        link=item.link,
-                        issue_number=issue_num,
-                        detected_at=datetime.now(timezone.utc).isoformat()
-                    ))
+            for future in as_completed(future_to_site):
+                site_key, site_info = future_to_site[future]
+                try:
+                    results = future.result()
+                    for item, summary, body in results:
+                        all_results.append((site_key, site_info, item, summary, body))
+                except Exception as e:
+                    logger.error(f"Site processing failed for {site_info['name']}: {e}")
+                    self.errors.append(f"{site_info['name']}: {e}")
+        
+        # Create issues
+        issues_created = 0
+        for site_key, site_info, item, summary, body in all_results:
+            issue_num = self._create_issue(site_info, item, summary, body)
+            if issue_num:
+                issues_created += 1
+                handled.append(HandledRelease(
+                    id=item.id,
+                    title=item.title,
+                    link=item.link,
+                    issue_number=issue_num,
+                    detected_at=datetime.now(timezone.utc).isoformat()
+                ))
         
         self._save_handled(handled)
         
