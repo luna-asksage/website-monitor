@@ -109,8 +109,8 @@ class WebsiteMonitor:
             "asksage_api": {
                 "url": "https://api.asksage.ai/server/query",
                 "token": "",
-                "model": "google-gemini-2.5-pro",
-                "temperature": 0.1
+                "model": "google-claude-45-opus",
+                "temperature": 0.2
             },
             "storage_dir": "storage",
             "max_content_length": 50000,
@@ -426,50 +426,64 @@ class WebsiteMonitor:
         if not new_items:
             return None
         
-        system_prompt = """You are an expert AI/ML technical analyst monitoring product releases and API changes.
+        system_prompt = """You are an expert AI/ML technical analyst. Your job is to identify NEW AI product releases and API changes that developers need to know about.
 
-You will receive NEW content items that were just detected from an AI company's website. Your job is to determine if these announce RELEVANT product or API changes.
+CRITICAL: You MUST flag these types of announcements - DO NOT MISS THEM:
 
-RELEVANT changes (CREATE AN ISSUE):
-- New AI models or model versions (e.g., "GPT-5", "Claude 4", "Gemini 2.0")
-- Model pricing changes
-- New API features, endpoints, or capabilities
-- API deprecations or breaking changes
-- New SDKs, libraries, or development tools
-- Significant model capability improvements (context length, speed, etc.)
-- New product features that affect developers
+🚨 HIGH PRIORITY - ALWAYS FLAG:
+- New model releases (GPT-5, Claude 4, Gemini 2.5, etc.)
+- New model versions (GPT-4.1, Claude 3.5 Sonnet v2, etc.)
+- Model capability announcements (new context window, vision, audio, etc.)
+- New API endpoints or features
+- Pricing changes for models or APIs
+- Model deprecations or sunset announcements
+- New SDKs or official libraries
+- Rate limit changes
+- New developer tools or playgrounds
 
-NOT RELEVANT (DO NOT CREATE AN ISSUE):
-- General blog posts about AI research
-- Company news, funding, partnerships (unless launching new products)
-- Policy updates, safety announcements
-- Hiring announcements
-- Conference talks or papers
-- Minor documentation fixes
+⚠️ MEDIUM PRIORITY - FLAG IF DEVELOPER-RELEVANT:
+- Research announcements that include model access
+- Beta/preview program announcements
+- Significant documentation updates about capabilities
+- Integration announcements (new platforms, partnerships with dev impact)
 
-IMPORTANT: Be INCLUSIVE rather than exclusive. If there's any chance it's a relevant product/API update, include it. Missing a release is worse than a false positive.
+❌ DO NOT FLAG:
+- Pure research papers with no product
+- Corporate news (funding, hiring, office locations)
+- Policy/safety announcements with no product changes
+- Opinion pieces or thought leadership
+- Event announcements without product reveals
 
-If you find relevant changes, respond with a detailed summary in this format:
+IMPORTANT RULES:
+1. When in doubt, FLAG IT. False positives are acceptable; missed releases are not.
+2. Look for model names, version numbers, "introducing", "announcing", "now available", "launching"
+3. Check the FULL linked content, not just the preview
+4. Multiple items may be relevant - include ALL of them
 
-### Summary
-Brief 1-2 sentence overview of what's new.
+RESPONSE FORMAT for relevant items:
 
-### New Releases & Changes
+### 🚀 Summary
+[One-line summary of the most important announcement]
 
-#### [Release/Feature Name]
-- **What:** Detailed description
-- **Details:** Key specifications (model name, capabilities, pricing, etc.)
-- **Link:** [URL if available]
+### New Releases & Updates
 
-### Impact
-Who/what this affects and any recommended actions.
+#### [Product/Model Name]
+- **What's New:** [Clear description]
+- **Key Details:** [Model specs, pricing, availability, etc.]
+- **Developer Impact:** [How this affects developers]
+
+[Repeat for each relevant item]
+
+### Quick Links
+- [Link 1]
+- [Link 2]
 
 ---
 
-If NONE of the items are relevant, respond with exactly: "None"
+If NOTHING is relevant, respond with exactly: "None"
 """
 
-        # Build content for analysis
+        # Build content for analysis - be generous with content
         items_text = ""
         for i, item in enumerate(new_items, 1):
             items_text += f"\n{'='*60}\n"
@@ -477,30 +491,31 @@ If NONE of the items are relevant, respond with exactly: "None"
             items_text += f"**Title:** {item.title}\n"
             items_text += f"**Date:** {item.date}\n"
             items_text += f"**Link:** {item.link}\n"
-            items_text += f"**Preview Content:**\n{item.content[:2000]}\n"
+            items_text += f"**Content Preview:**\n{item.content[:3000]}\n"
             
-            # Add linked full content if available
+            # Add linked full content if available - this is critical for full details
             if item.link in linked_contents and linked_contents[item.link]:
-                items_text += f"\n**Full Linked Page Content:**\n{linked_contents[item.link][:15000]}\n"
+                items_text += f"\n**=== FULL ARTICLE CONTENT ===**\n{linked_contents[item.link][:25000]}\n"
+                items_text += f"**=== END FULL CONTENT ===**\n"
         
         user_message = f"""Website: {site_name}
 
-The following NEW items were just detected on this website. Analyze each one to determine if it announces relevant product/API changes.
+I detected {len(new_items)} NEW item(s) on this AI company's website. Analyze each one carefully.
 
 {items_text}
 
 {'='*60}
 
-Instructions:
-1. Read each new item carefully
-2. Check both the preview AND the full linked content when available
-3. Determine if ANY item announces a relevant product/API change
-4. If yes, provide a detailed summary covering ALL relevant items
-5. If none are relevant, respond with exactly "None"
+TASK:
+1. Read EVERY new item carefully, including the full article content
+2. Identify ANY announcements about new models, API changes, or developer-relevant updates
+3. Look for keywords: "introducing", "announcing", "new", "launching", "available", version numbers
+4. If you find relevant items, provide a detailed summary
+5. If nothing is relevant, respond with exactly "None"
 
-Be thorough - look for model names, version numbers, API endpoints, features, pricing, etc.
+Remember: It's better to flag something that might be relevant than to miss a major release.
 
-Your response:"""
+Your analysis:"""
 
         try:
             api_url = self.config['asksage_api']['url']
