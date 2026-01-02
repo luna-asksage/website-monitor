@@ -1,33 +1,4 @@
 {
-  "releases": [
-    {
-      "id": "75806ca9cd5d6e86",
-      "title": "December 17, 2025",
-      "link": "https://ai.google.dev/gemini-api/docs/changelog",
-      "issue_number": 15,
-      "detected_at": "2025-12-22T21:46:23.845424+00:00"
-    },
-    {
-      "id": "7e94a9e8471304e6",
-      "title": "Introducing GPT-5.2-Codex",
-      "link": "https://openai.com/index/introducing-gpt-5-2-codex",
-      "issue_number": 16,
-      "detected_at": "2025-12-22T21:46:24.210335+00:00"
-    },
-    {
-      "id": "875b934ac768fffc",
-      "title": "Introducing GPT-5.2-Codex",
-      "link": "https://openai.com/index/gpt-5-2-codex",
-      "issue_number": 17,
-      "detected_at": "2025-12-22T21:46:24.592030+00:00"
-    },
-    {
-      "id": "d31bff6fad30d821",
-      "title": "Addendum to GPT-5.2 System Card: GPT-5.2-Codex",
-      "link": "https://openai.com/index/gpt-5-2-codex-system-card",
-      "issue_number": 18,
-      "detected_at": "2025-12-22T21:46:24.915766+00:00"
-    }
-  ],
-  "updated": "2026-01-01T18:28:03.346270+00:00"
+  "releases": [],
+  "updated": "2026-01-02T01:28:27.858217+00:00"
 }
