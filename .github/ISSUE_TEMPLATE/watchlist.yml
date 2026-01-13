@@ -1,0 +1,66 @@
+name: "📋 Watchlist Item"
+description: Track something to watch for in future releases
+labels: ["type:watchlist"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Add to Watchlist
+        
+        Use this form to track upcoming releases, features, or availability changes you're waiting for.
+        
+        The monitor will automatically check each article against your watchlist items and create a release issue when the condition is met.
+
+  - type: textarea
+    id: watch-for
+    attributes:
+      label: What to watch for
+      description: Describe specifically what you're waiting for
+      placeholder: |
+        Example: Gemini 3 Pro and Gemini 3 Flash leaving public preview and becoming Generally Available (GA) in US regions.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it matters
+      description: Why is this relevant to us? What will we do when this happens?
+      placeholder: |
+        Example: Preview models are only available in the global region. We are restricted to US regions only, so we cannot use these models until GA.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sources
+    attributes:
+      label: Sources to watch
+      description: Which provider(s) should be checked for this?
+      multiple: true
+      options:
+        - All sources
+        - OpenAI
+        - Anthropic
+        - Gemini
+    validations:
+      required: true
+
+  - type: input
+    id: expires
+    attributes:
+      label: Expires after (days)
+      description: Auto-close this watchlist item if not resolved within this many days. Leave blank for default (180 days).
+      placeholder: "180"
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        
+        **What happens next:**
+        1. This issue will be added to the watchlist
+        2. Each monitor run will check new articles against your criteria
+        3. When a matching article is found, a release issue will be created
+        4. This issue will be automatically closed with a comment linking to the release

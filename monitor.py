@@ -8,6 +8,7 @@ import os
 import json
 import hashlib
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -28,6 +29,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# Data Classes
+# =============================================================================
 
 @dataclass
 class ContentItem:
@@ -60,6 +65,51 @@ class HandledRelease:
     def from_dict(cls, data: dict) -> 'HandledRelease':
         return cls(**data)
 
+
+@dataclass
+class WatchlistItem:
+    """An item being watched for future availability."""
+    issue_number: int
+    title: str
+    watch_for: str
+    why: str
+    sources: List[str]
+    created_at: str
+    expires_at: str
+    
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class AnalysisResult:
+    """Result of analyzing a content item."""
+    item: ContentItem
+    is_relevant: bool
+    summary: str
+    issue_body: str
+    resolves_watchlist: Optional[int] = None
+
+
+# =============================================================================
+# Required Labels
+# =============================================================================
+
+REQUIRED_LABELS = [
+    {"name": "type:release", "color": "0E8A16", "description": "AI release/update detected"},
+    {"name": "type:watchlist", "color": "1D76DB", "description": "Watching for future availability"},
+    {"name": "type:bug", "color": "D73A4A", "description": "System error"},
+    {"name": "openai", "color": "412991", "description": "OpenAI source"},
+    {"name": "anthropic", "color": "D97706", "description": "Anthropic source"},
+    {"name": "gemini", "color": "FBBC04", "description": "Google Gemini source"},
+    {"name": "not-relevant", "color": "E99695", "description": "False positive"},
+    {"name": "auto-close-7d", "color": "BFD4F2", "description": "Auto-closes after 7 days"},
+]
+
+
+# =============================================================================
+# LLM Client
+# =============================================================================
 
 class LLMClient:
     """Handles all LLM API interactions."""
@@ -133,6 +183,10 @@ class LLMClient:
             return None, f"Unexpected error: {e}"
 
 
+# =============================================================================
+# Website Monitor
+# =============================================================================
+
 class WebsiteMonitor:
     """Monitors websites for AI product releases."""
     
@@ -158,6 +212,18 @@ class WebsiteMonitor:
         self.max_fetch_workers = 5
         self.max_llm_workers = 3
         
+        # Token budget settings
+        self.chars_per_token = 3  # Conservative estimate
+        self.response_buffer_tokens = 10_000
+        self.max_combined_context = 160_000
+        
+        # Cache for known models
+        self._known_models_cache: Optional[Dict[str, List[str]]] = None
+        
+        # Cache for context files
+        self._watchlist_content: Optional[str] = None
+        self._mistakes_content: Optional[str] = None
+        
         # Browser-like session
         self.session = requests.Session()
         self.session.headers.update({
@@ -165,6 +231,13 @@ class WebsiteMonitor:
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
         })
+        
+        # Model documentation URLs
+        self.model_docs = {
+            "anthropic": "https://docs.anthropic.com/en/docs/about-claude/models",
+            "openai": "https://platform.openai.com/docs/models",
+            "google": "https://ai.google.dev/gemini-api/docs/models"
+        }
         
         self.websites = {
             "openai": {
@@ -192,6 +265,10 @@ class WebsiteMonitor:
                 "base_url": "https://ai.google.dev"
             },
         }
+    
+    # =========================================================================
+    # Configuration
+    # =========================================================================
     
     def _load_config(self, config_path: str) -> Dict:
         default_config = {
@@ -223,6 +300,10 @@ class WebsiteMonitor:
             self.config['asksage_api']['token'] = os.getenv('ASKSAGE_API_TOKEN')
             logger.info("Using API token from environment")
     
+    # =========================================================================
+    # Utilities
+    # =========================================================================
+    
     def _generate_id(self, *args) -> str:
         combined = '|'.join(str(a).strip() for a in args if a)
         return hashlib.sha256(combined.encode()).hexdigest()[:16]
@@ -244,6 +325,627 @@ class WebsiteMonitor:
             return True
         cutoff = datetime.now(timezone.utc) - timedelta(days=self.time_window_days)
         return date >= cutoff
+    
+    def _get_provider_key(self, source_name: str) -> str:
+        """Map source name to provider key for model lookup."""
+        name_lower = source_name.lower()
+        if 'anthropic' in name_lower or 'claude' in name_lower:
+            return 'anthropic'
+        elif 'openai' in name_lower:
+            return 'openai'
+        elif 'google' in name_lower or 'gemini' in name_lower:
+            return 'google'
+        return ''
+    
+    def _github_api(self, method: str, endpoint: str, **kwargs) -> Optional[requests.Response]:
+        """Make a GitHub API request."""
+        if not self.github_token or not self.github_repo:
+            return None
+        
+        url = f"https://api.github.com/repos/{self.github_repo}{endpoint}"
+        headers = {
+            'Authorization': f'token {self.github_token}',
+            'Accept': 'application/vnd.github.v3+json'
+        }
+        
+        try:
+            resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+            resp.raise_for_status()
+            return resp
+        except Exception as e:
+            logger.error(f"GitHub API error ({method} {endpoint}): {e}")
+            return None
+    
+    # =========================================================================
+    # Label Management
+    # =========================================================================
+    
+    def _ensure_labels_exist(self):
+        """Create required labels if they don't exist."""
+        if not self.github_token or not self.github_repo:
+            return
+        
+        resp = self._github_api('GET', '/labels', params={'per_page': 100})
+        if not resp:
+            return
+        
+        existing = {label['name'].lower() for label in resp.json()}
+        
+        for label in REQUIRED_LABELS:
+            if label['name'].lower() not in existing:
+                self._github_api('POST', '/labels', json=label)
+                logger.info(f"Created label: {label['name']}")
+    
+    # =========================================================================
+    # Known Models
+    # =========================================================================
+    
+    def _fetch_known_models(self) -> Dict[str, List[str]]:
+        """
+        Fetch current model lists from each provider's documentation.
+        Returns dict mapping provider name to list of known model identifiers.
+        """
+        if self._known_models_cache is not None:
+            return self._known_models_cache
+        
+        models = {
+            'anthropic': [],
+            'openai': [],
+            'google': []
+        }
+        
+        # Anthropic models
+        try:
+            resp = self.session.get(self.model_docs['anthropic'], timeout=20)
+            if resp.ok:
+                text = resp.text.lower()
+                anthropic_pattern = r'claude-[\w\d.-]+'
+                found = set(re.findall(anthropic_pattern, text))
+                models['anthropic'] = sorted(found)
+                logger.info(f"Found {len(models['anthropic'])} Anthropic models")
+        except Exception as e:
+            logger.warning(f"Failed to fetch Anthropic models: {e}")
+        
+        # OpenAI models
+        try:
+            resp = self.session.get(self.model_docs['openai'], timeout=20)
+            if resp.ok:
+                text = resp.text.lower()
+                openai_patterns = [
+                    r'gpt-[\w\d.-]+',
+                    r'o[1-9]-[\w-]+',
+                    r'o[1-9](?!\w)',
+                    r'davinci-[\w\d-]+',
+                    r'codex-[\w\d-]+',
+                ]
+                found = set()
+                for pattern in openai_patterns:
+                    found.update(re.findall(pattern, text))
+                models['openai'] = sorted(found)
+                logger.info(f"Found {len(models['openai'])} OpenAI models")
+        except Exception as e:
+            logger.warning(f"Failed to fetch OpenAI models: {e}")
+        
+        # Google Gemini models
+        try:
+            resp = self.session.get(self.model_docs['google'], timeout=20)
+            if resp.ok:
+                text = resp.text.lower()
+                gemini_pattern = r'gemini-[\w\d.-]+'
+                found = set(re.findall(gemini_pattern, text))
+                models['google'] = sorted(found)
+                logger.info(f"Found {len(models['google'])} Google models")
+        except Exception as e:
+            logger.warning(f"Failed to fetch Google models: {e}")
+        
+        # Fallbacks if scraping failed
+        if not models['anthropic']:
+            models['anthropic'] = [
+                'claude-4.5-opus', 'claude-4.5-sonnet', 'claude-4-opus', 'claude-4-sonnet',
+                'claude-3.5-opus', 'claude-3.5-sonnet', 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku'
+            ]
+            logger.info("Using fallback Anthropic model list")
+        
+        if not models['openai']:
+            models['openai'] = [
+                'gpt-5', 'gpt-5-turbo', 'gpt-4.5', 'gpt-4.5-turbo', 'gpt-4o', 'gpt-4o-mini',
+                'gpt-4-turbo', 'gpt-4', 'o1', 'o1-preview', 'o1-mini', 'o3', 'o3-mini'
+            ]
+            logger.info("Using fallback OpenAI model list")
+        
+        if not models['google']:
+            models['google'] = [
+                'gemini-3-pro', 'gemini-3-flash', 'gemini-2.5-pro', 'gemini-2.5-flash',
+                'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite',
+                'gemini-1.5-pro', 'gemini-1.5-flash'
+            ]
+            logger.info("Using fallback Google model list")
+        
+        self._known_models_cache = models
+        return models
+    
+    # =========================================================================
+    # Watchlist Management
+    # =========================================================================
+    
+    def _fetch_open_watchlist_issues(self) -> List[dict]:
+        """Fetch all open issues with type:watchlist label."""
+        resp = self._github_api('GET', '/issues', params={
+            'labels': 'type:watchlist',
+            'state': 'open',
+            'per_page': 100
+        })
+        if not resp:
+            return []
+        return resp.json()
+    
+    def _parse_watchlist_issue(self, issue: dict) -> Optional[WatchlistItem]:
+        """Parse a watchlist issue into a WatchlistItem."""
+        body = issue.get('body', '')
+        if not body:
+            return None
+        
+        watch_for = ""
+        why = ""
+        sources = []
+        expires_days = 180
+        
+        # Extract "What to watch for" section
+        watch_match = re.search(
+            r'(?:What to watch for|### What to watch for)\s*\n+(.+?)(?=\n\s*(?:###|Why|$))',
+            body, re.IGNORECASE | re.DOTALL
+        )
+        if watch_match:
+            watch_for = watch_match.group(1).strip()
+        
+        # Extract "Why it matters" section
+        why_match = re.search(
+            r'(?:Why it matters|### Why it matters)\s*\n+(.+?)(?=\n\s*(?:###|Sources|$))',
+            body, re.IGNORECASE | re.DOTALL
+        )
+        if why_match:
+            why = why_match.group(1).strip()
+        
+        # Extract sources
+        if 'all sources' in body.lower():
+            sources = ['openai', 'anthropic', 'gemini']
+        else:
+            if 'openai' in body.lower():
+                sources.append('openai')
+            if 'anthropic' in body.lower():
+                sources.append('anthropic')
+            if 'gemini' in body.lower():
+                sources.append('gemini')
+        
+        if not sources:
+            sources = ['openai', 'anthropic', 'gemini']
+        
+        # Extract expiration
+        expires_match = re.search(r'Expires.*?(\d+)', body, re.IGNORECASE)
+        if expires_match:
+            try:
+                expires_days = int(expires_match.group(1))
+            except ValueError:
+                pass
+        
+        created_at = issue.get('created_at', datetime.now(timezone.utc).isoformat())
+        try:
+            created_dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+            expires_dt = created_dt + timedelta(days=expires_days)
+            expires_at = expires_dt.isoformat()
+        except Exception:
+            expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_days)).isoformat()
+        
+        if not watch_for:
+            watch_for = issue.get('title', 'Unknown')
+        
+        return WatchlistItem(
+            issue_number=issue['number'],
+            title=issue.get('title', 'Unknown'),
+            watch_for=watch_for,
+            why=why,
+            sources=sources,
+            created_at=created_at,
+            expires_at=expires_at
+        )
+    
+    def _generate_watchlist_md(self, items: List[WatchlistItem]) -> str:
+        """Generate watchlist.md content from watchlist items."""
+        now = datetime.now(timezone.utc)
+        
+        lines = [
+            "# Watchlist",
+            "",
+            "> Auto-generated from open GitHub issues with `type:watchlist` label.",
+            "> Manage via GitHub issues. Do not edit manually.",
+            ">",
+            f"> Last updated: {now.isoformat()}",
+            "",
+        ]
+        
+        if not items:
+            lines.append("*No active watchlist items.*")
+        else:
+            for item in items:
+                try:
+                    expires_dt = datetime.fromisoformat(item.expires_at.replace('Z', '+00:00'))
+                    days_remaining = (expires_dt - now).days
+                    expires_str = f"{expires_dt.strftime('%Y-%m-%d')} ({days_remaining} days remaining)"
+                except Exception:
+                    expires_str = item.expires_at
+                
+                lines.extend([
+                    "---",
+                    "",
+                    f"## {item.title}",
+                    f"- **Issue:** #{item.issue_number}",
+                    f"- **Watch for:** {item.watch_for}",
+                ])
+                if item.why:
+                    lines.append(f"- **Why:** {item.why}")
+                lines.extend([
+                    f"- **Sources:** {', '.join(item.sources)}",
+                    f"- **Expires:** {expires_str}",
+                    "",
+                ])
+        
+        return '\n'.join(lines)
+    
+    def _close_expired_watchlist(self, items: List[WatchlistItem]):
+        """Close watchlist items that have expired."""
+        now = datetime.now(timezone.utc)
+        
+        for item in items:
+            try:
+                expires_dt = datetime.fromisoformat(item.expires_at.replace('Z', '+00:00'))
+                if now > expires_dt:
+                    self._github_api('POST', f'/issues/{item.issue_number}/comments', json={
+                        'body': f"⏰ This watchlist item has expired after reaching its expiration date ({expires_dt.strftime('%Y-%m-%d')}).\n\nReopening this issue will reset the expiration timer."
+                    })
+                    self._github_api('PATCH', f'/issues/{item.issue_number}', json={
+                        'state': 'closed'
+                    })
+                    logger.info(f"Closed expired watchlist item #{item.issue_number}")
+            except Exception as e:
+                logger.warning(f"Failed to check/close watchlist item #{item.issue_number}: {e}")
+    
+    def _resolve_watchlist_item(self, watchlist_issue_number: int, release_issue_number: int):
+        """Mark a watchlist item as resolved."""
+        self._github_api('POST', f'/issues/{watchlist_issue_number}/comments', json={
+            'body': f"✅ **Resolved!**\n\nThis watchlist item has been resolved by release issue #{release_issue_number}."
+        })
+        
+        self._github_api('PATCH', f'/issues/{watchlist_issue_number}', json={
+            'state': 'closed'
+        })
+        
+        logger.info(f"Resolved watchlist item #{watchlist_issue_number} via #{release_issue_number}")
+    
+    # =========================================================================
+    # Mistakes / Learning Management
+    # =========================================================================
+    
+    def _fetch_unprocessed_mistakes(self) -> List[dict]:
+        """Fetch issues marked as not-relevant that haven't been processed yet."""
+        resp = self._github_api('GET', '/issues', params={
+            'labels': 'not-relevant',
+            'state': 'open',
+            'per_page': 100
+        })
+        if not resp:
+            return []
+        
+        issues = []
+        for issue in resp.json():
+            labels = [l['name'] for l in issue.get('labels', [])]
+            if 'type:release' in labels:
+                issues.append(issue)
+        
+        return issues
+    
+    def _extract_user_feedback(self, issue: dict) -> Optional[str]:
+        """Extract the user's comment explaining why the issue is not relevant."""
+        issue_number = issue['number']
+        
+        resp = self._github_api('GET', f'/issues/{issue_number}/comments')
+        if not resp:
+            return None
+        
+        comments = resp.json()
+        
+        for comment in reversed(comments):
+            user = comment.get('user', {})
+            if user.get('type') != 'Bot' and '[bot]' not in user.get('login', ''):
+                return comment.get('body', '')
+        
+        return None
+    
+    def _generate_lesson(self, issue: dict, feedback: str) -> Optional[Tuple[str, str]]:
+        """
+        Generate a lesson from a false positive.
+        
+        Returns:
+            Tuple of (lesson_text, category) or None if generation fails
+        """
+        body = issue.get('body', '')
+        title = issue.get('title', '')
+        
+        labels = [l['name'] for l in issue.get('labels', [])]
+        source = 'Unknown'
+        for label in labels:
+            if label in ['openai', 'anthropic', 'gemini']:
+                source = label.capitalize()
+                break
+        
+        prompt = f"""You incorrectly classified an article as relevant for API developers. Learn from this mistake.
+
+ORIGINAL ISSUE TITLE: {title}
+
+ORIGINAL ISSUE BODY:
+{body[:3000]}
+
+USER FEEDBACK (explaining why this was NOT relevant):
+{feedback}
+
+Generate a succinct lesson (2-4 sentences) that would prevent this mistake in the future.
+Use both positive guidance (what TO look for) and negative guidance (what NOT to do).
+Focus on the specific pattern that caused the error.
+
+Choose ONE category that best describes this type of mistake:
+- hallucinated_model: LLM imagined a model that doesn't exist or isn't new
+- existing_model: Article discussed an existing model as if it were new
+- consumer_not_api: Article was about consumer products (ChatGPT, Claude App) not API
+- partnership: Article was about partnerships or customer case studies
+- policy_research: Article was about policy, safety, or research papers
+- other: Doesn't fit other categories
+
+Respond in EXACTLY this format:
+LESSON: [your 2-4 sentence lesson]
+CATEGORY: [one category from the list above]"""
+
+        response, error = self.llm.query(prompt)
+        
+        if error:
+            logger.error(f"Failed to generate lesson: {error}")
+            return None
+        
+        lesson = ""
+        category = "other"
+        
+        lesson_match = re.search(r'LESSON:\s*(.+?)(?=CATEGORY:|$)', response, re.DOTALL | re.IGNORECASE)
+        if lesson_match:
+            lesson = lesson_match.group(1).strip()
+        
+        category_match = re.search(r'CATEGORY:\s*(\w+)', response, re.IGNORECASE)
+        if category_match:
+            category = category_match.group(1).lower()
+        
+        if not lesson:
+            lesson = response.strip()
+        
+        return lesson, category
+    
+    def _append_to_mistakes_md(self, issue: dict, lesson: str, category: str):
+        """Append a lesson to mistakes.md."""
+        mistakes_path = self.storage_dir / "mistakes.md"
+        
+        existing_content = ""
+        if mistakes_path.exists():
+            existing_content = mistakes_path.read_text()
+        
+        now = datetime.now(timezone.utc)
+        
+        if not existing_content.strip():
+            existing_content = f"""# Lessons Learned
+
+> Auto-generated from issues marked `not-relevant`.
+> These lessons inform future classification decisions.
+>
+> Last updated: {now.isoformat()}
+
+"""
+        
+        # Update timestamp
+        existing_content = re.sub(
+            r'Last updated:.*',
+            f'Last updated: {now.isoformat()}',
+            existing_content
+        )
+        
+        title = issue.get('title', 'Unknown')
+        issue_number = issue['number']
+        created_at = issue.get('created_at', '')[:10]
+        
+        labels = [l['name'] for l in issue.get('labels', [])]
+        source = 'Unknown'
+        for label in labels:
+            if label in ['openai', 'anthropic', 'gemini']:
+                source = label.capitalize()
+                break
+        
+        lesson_title = lesson.split('.')[0][:60] if lesson else "Lesson learned"
+        
+        new_entry = f"""
+---
+
+## {lesson_title}
+- **Issue:** #{issue_number}
+- **Source:** {source}
+- **Date:** {created_at}
+- **Category:** `{category}`
+
+{lesson}
+"""
+        
+        full_content = existing_content.rstrip() + "\n" + new_entry
+        
+        mistakes_path.write_text(full_content)
+        logger.info(f"Added lesson to mistakes.md from issue #{issue_number}")
+    
+    def _process_false_positives(self):
+        """Process all unprocessed false positive issues."""
+        issues = self._fetch_unprocessed_mistakes()
+        
+        if not issues:
+            logger.info("No unprocessed false positives")
+            return
+        
+        logger.info(f"Processing {len(issues)} false positive(s)")
+        
+        for issue in issues:
+            issue_number = issue['number']
+            
+            feedback = self._extract_user_feedback(issue)
+            if not feedback:
+                self._github_api('POST', f'/issues/{issue_number}/comments', json={
+                    'body': "⚠️ Please add a comment explaining why this issue is not relevant, so I can learn from this mistake."
+                })
+                logger.info(f"Requested feedback on #{issue_number}")
+                continue
+            
+            result = self._generate_lesson(issue, feedback)
+            if not result:
+                self.errors.append(f"Failed to generate lesson for #{issue_number}")
+                continue
+            
+            lesson, category = result
+            
+            self._append_to_mistakes_md(issue, lesson, category)
+            
+            self._github_api('POST', f'/issues/{issue_number}/comments', json={
+                'body': f"📚 **Lesson learned!**\n\n> {lesson}\n\nThis has been added to my knowledge base to prevent similar mistakes."
+            })
+            self._github_api('PATCH', f'/issues/{issue_number}', json={
+                'state': 'closed'
+            })
+            
+            logger.info(f"Processed false positive #{issue_number}")
+    
+    # =========================================================================
+    # Context Management
+    # =========================================================================
+    
+    def _load_context_files(self) -> Tuple[str, str]:
+        """Load watchlist.md and mistakes.md content."""
+        watchlist_content = ""
+        mistakes_content = ""
+        
+        watchlist_path = self.storage_dir / "watchlist.md"
+        if watchlist_path.exists():
+            watchlist_content = watchlist_path.read_text()
+        
+        mistakes_path = self.storage_dir / "mistakes.md"
+        if mistakes_path.exists():
+            mistakes_content = mistakes_path.read_text()
+        
+        return watchlist_content, mistakes_content
+    
+    def _calculate_token_budget(self, article_content: str, base_prompt: str,
+                                watchlist: str, mistakes: str) -> str:
+        """
+        Determine whether to use combined or split query strategy.
+        
+        Returns:
+            'combined' or 'split'
+        """
+        base_tokens = (len(base_prompt) + len(article_content)) // self.chars_per_token
+        base_total = base_tokens + self.response_buffer_tokens
+        
+        context_tokens = (len(watchlist) + len(mistakes)) // self.chars_per_token
+        
+        if base_total + context_tokens < self.max_combined_context:
+            return 'combined'
+        else:
+            return 'split'
+    
+    def _format_watchlist_for_prompt(self, watchlist_content: str, source: str) -> str:
+        """Format watchlist content for inclusion in prompt, filtered by source."""
+        if not watchlist_content.strip():
+            return ""
+        
+        items = []
+        current_item = None
+        
+        for line in watchlist_content.split('\n'):
+            if line.startswith('## ') and not line.startswith('## Active'):
+                if current_item:
+                    items.append(current_item)
+                current_item = {'title': line[3:].strip(), 'lines': []}
+            elif current_item and line.strip():
+                current_item['lines'].append(line)
+        
+        if current_item:
+            items.append(current_item)
+        
+        source_lower = source.lower()
+        relevant_items = []
+        for item in items:
+            item_text = '\n'.join(item['lines'])
+            if source_lower in item_text.lower() or 'all' in item_text.lower():
+                relevant_items.append(item)
+        
+        if not relevant_items:
+            return ""
+        
+        lines = ["WATCHLIST - Things we are actively watching for:"]
+        for i, item in enumerate(relevant_items, 1):
+            issue_match = re.search(r'#(\d+)', '\n'.join(item['lines']))
+            issue_num = issue_match.group(1) if issue_match else '?'
+            
+            watch_for = ""
+            why = ""
+            for line in item['lines']:
+                if 'Watch for:' in line:
+                    watch_for = line.split('Watch for:')[1].strip()
+                elif 'Why:' in line:
+                    why = line.split('Why:')[1].strip()
+            
+            lines.append(f"{i}. [Issue #{issue_num}] {item['title']}: {watch_for}")
+            if why:
+                lines.append(f"   Reason: {why}")
+        
+        lines.append("")
+        lines.append("If this article announces that a watchlist item is NOW AVAILABLE or RESOLVED,")
+        lines.append("mark it as RELEVANT and include 'RESOLVES_WATCHLIST: #<issue_number>' in your response.")
+        
+        return '\n'.join(lines)
+    
+    def _format_mistakes_for_prompt(self, mistakes_content: str) -> str:
+        """Format mistakes content for inclusion in prompt."""
+        if not mistakes_content.strip():
+            return ""
+        
+        lessons = []
+        current_lesson = None
+        
+        for line in mistakes_content.split('\n'):
+            if line.startswith('## '):
+                if current_lesson and current_lesson.get('text'):
+                    lessons.append(current_lesson)
+                current_lesson = {'title': line[3:].strip(), 'text': '', 'category': ''}
+            elif current_lesson:
+                if line.startswith('- **Category:**'):
+                    cat_match = re.search(r'`(\w+)`', line)
+                    if cat_match:
+                        current_lesson['category'] = cat_match.group(1)
+                elif not line.startswith('- **') and not line.startswith('---') and line.strip():
+                    current_lesson['text'] += ' ' + line.strip()
+        
+        if current_lesson and current_lesson.get('text'):
+            lessons.append(current_lesson)
+        
+        if not lessons:
+            return ""
+        
+        # Limit to most recent lessons to save tokens
+        lessons = lessons[-10:]
+        
+        lines = ["LESSONS FROM PAST MISTAKES - Do not repeat these errors:"]
+        for i, lesson in enumerate(lessons, 1):
+            cat = f"[{lesson['category']}]" if lesson['category'] else ""
+            lines.append(f"{i}. {cat} {lesson['text'].strip()}")
+        
+        return '\n'.join(lines)
     
     # =========================================================================
     # Content Extraction
@@ -386,7 +1088,6 @@ class WebsiteMonitor:
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, 'html.parser')
             
-            import re
             date_pattern = re.compile(
                 r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}',
                 re.IGNORECASE
@@ -527,13 +1228,8 @@ class WebsiteMonitor:
     # LLM Analysis
     # =========================================================================
     
-    def _analyze_item(self, item: ContentItem) -> Tuple[bool, str, str]:
-        """
-        Analyze a single item to determine if it's a relevant release.
-        
-        Returns:
-            Tuple of (is_relevant, summary, issue_body)
-        """
+    def _analyze_item(self, item: ContentItem, watchlist_items: List[WatchlistItem]) -> AnalysisResult:
+        """Analyze a single item to determine if it's a relevant release."""
         content = f"TITLE: {item.title}\n"
         content += f"DATE: {item.date}\n" if item.date else ""
         content += f"SOURCE: {item.source_name}\n"
@@ -554,37 +1250,136 @@ In 2-3 sentences, what is the main topic or announcement of this article? Be spe
         
         if error1:
             logger.error(f"Query 1 failed for {item.title[:40]}: {error1}")
-            return False, "", ""
+            return AnalysisResult(item=item, is_relevant=False, summary="", issue_body="")
         
         logger.info(f"Summary: {response1[:100]}...")
         
-        # Query 2: Classify
+        # Get known models for context
+        known_models = self._fetch_known_models()
+        provider_key = self._get_provider_key(item.source_name)
+        provider_models = known_models.get(provider_key, [])
+        
+        # Build context components
+        models_context = ""
+        if provider_models:
+            models_context = f"""
+KNOWN MODELS - These models ALREADY EXIST for {item.source_name} (as of today):
+{', '.join(provider_models[:30])}
+
+If the article discusses a model in this list, it is NOT a new model release."""
+        
+        # Format watchlist and mistakes for prompt
+        watchlist_context = self._format_watchlist_for_prompt(
+            self._watchlist_content or "", 
+            item.source_name
+        )
+        mistakes_context = self._format_mistakes_for_prompt(
+            self._mistakes_content or ""
+        )
+        
+        # Check token budget
+        base_prompt = f"""Title: {item.title}
+Summary: {response1}
+{models_context}"""
+        
+        strategy = self._calculate_token_budget(
+            content, base_prompt, watchlist_context, mistakes_context
+        )
+        
+        # Build Query 2 based on strategy
+        if strategy == 'combined':
+            extra_context = ""
+            if watchlist_context:
+                extra_context += f"\n\n{watchlist_context}"
+            if mistakes_context:
+                extra_context += f"\n\n{mistakes_context}"
+        else:
+            extra_context = ""
+            logger.info("Using split query strategy due to token budget")
+        
         prompt2 = f"""Based on this summary of an article from {item.source_name}:
 
 Title: {item.title}
 Summary: {response1}
+{models_context}
+{extra_context}
 
-Is this article announcing or describing ANY of the following?
-1. A new AI model or new version of an existing model
-2. New API features, endpoints, or capabilities
-3. Pricing changes for AI models or APIs
-4. New SDKs, libraries, or developer tools
-5. Model deprecations or breaking API changes
-6. Significant capability improvements (context window, speed, multimodal support, etc.)
+Determine if this article announces something relevant for API DEVELOPERS.
+
+RELEVANT (answer YES):
+- A genuinely NEW AI model not in the known models list above
+- New API endpoints, parameters, features, or capabilities
+- Pricing changes for API usage
+- New SDKs, libraries, or developer tools for the API
+- Model deprecations or breaking API changes
+- Significant capability improvements (context window, speed, rate limits, etc.)
+- Updates to Claude Code that affect developers (not new skills/connectors)
+- Availability changes (e.g., a model becoming GA in new regions)
+
+NOT RELEVANT (answer NO):
+- Models that already exist (see list above) being discussed or promoted
+- Consumer product announcements (ChatGPT features, Claude App, Gemini App, AI Studio)
+- Subscription/Plus/Pro tier features for consumers
+- Partnership announcements or customer case studies
+- Healthcare/Enterprise/vertical solutions without new API capabilities
+- Policy updates, safety research, or company news
+- Blog posts explaining how to use existing features
+- Features only for ChatGPT, ChatGPT ATLAS, Claude subscribers, etc.
+- Preview/experimental models that are not Generally Available (unless watchlist item)
 
 Answer with EXACTLY this format:
 RELEVANT: YES or NO
-REASON: One sentence explaining your answer"""
+REASON: One sentence explaining your decision
+RESOLVES_WATCHLIST: #<issue_number> (only if this resolves a specific watchlist item, otherwise omit)"""
 
         response2, error2 = self.llm.query(prompt2)
         
         if error2:
             logger.error(f"Query 2 failed for {item.title[:40]}: {error2}")
-            return False, "", ""
+            return AnalysisResult(item=item, is_relevant=False, summary=response1, issue_body="")
+        
+        # Handle split strategy - additional queries for watchlist and mistakes
+        if strategy == 'split':
+            if watchlist_context:
+                watchlist_prompt = f"""Given this article summary:
+Title: {item.title}
+Summary: {response1}
+
+{watchlist_context}
+
+Does this article resolve any watchlist item? Answer with:
+RESOLVES_WATCHLIST: #<issue_number>
+Or if it doesn't resolve any: RESOLVES_WATCHLIST: NONE"""
+                
+                wl_response, wl_error = self.llm.query(watchlist_prompt)
+                if not wl_error and wl_response:
+                    response2 += "\n" + wl_response
+            
+            if mistakes_context:
+                mistakes_prompt = f"""Given this article summary:
+Title: {item.title}
+Summary: {response1}
+Source: {item.source_name}
+
+{mistakes_context}
+
+Would classifying this article as RELEVANT repeat any of the past mistakes listed above?
+Answer: YES (explain which mistake) or NO"""
+                
+                m_response, m_error = self.llm.query(mistakes_prompt)
+                if not m_error and m_response and 'YES' in m_response.upper():
+                    logger.info(f"Rejected by mistakes check: {item.title[:40]}")
+                    return AnalysisResult(
+                        item=item, 
+                        is_relevant=False, 
+                        summary=response1, 
+                        issue_body=""
+                    )
         
         # Parse response
         is_relevant = False
         reason = response2
+        resolves_watchlist = None
         
         response2_upper = response2.upper()
         if 'RELEVANT: YES' in response2_upper or 'RELEVANT:YES' in response2_upper:
@@ -594,13 +1389,28 @@ REASON: One sentence explaining your answer"""
         
         if 'REASON:' in response2.upper():
             idx = response2.upper().index('REASON:')
-            reason = response2[idx + 7:].strip()
+            end_idx = response2.upper().find('RESOLVES_WATCHLIST:', idx)
+            if end_idx == -1:
+                end_idx = len(response2)
+            reason = response2[idx + 7:end_idx].strip()
+        
+        # Check for watchlist resolution
+        watchlist_match = re.search(r'RESOLVES_WATCHLIST:\s*#?(\d+)', response2)
+        if watchlist_match:
+            resolves_watchlist = int(watchlist_match.group(1))
         
         if not is_relevant:
             logger.info(f"Not relevant: {item.title[:40]}... - {reason[:50]}")
-            return False, response1, ""
+            return AnalysisResult(
+                item=item, 
+                is_relevant=False, 
+                summary=response1, 
+                issue_body=""
+            )
         
         logger.info(f"✓ RELEVANT: {item.title[:40]}... - {reason[:50]}")
+        if resolves_watchlist:
+            logger.info(f"  Resolves watchlist item #{resolves_watchlist}")
         
         # Query 3: Generate issue body
         prompt3 = f"""Create a GitHub issue body summarizing this AI product/API release.
@@ -613,12 +1423,14 @@ Summary: {response1}
 {f"Full content: {item.full_content[:5000]}" if item.full_content else f"Description: {item.description}"}
 
 Write a clear, concise summary in Markdown format including:
-- What was released/announced
-- Key features or changes
-- Technical details if available (model names, versions, capabilities, pricing)
-- Any action items for developers
+- What was released/announced (be specific about model names, API endpoints, etc.)
+- Key features or changes for API developers
+- Technical details (model names, versions, capabilities, pricing if mentioned)
+- Any action items for developers using the API
 
-Keep it professional and focused on the facts."""
+Note if this affects specific platforms (AWS Bedrock, Google Cloud Vertex AI, etc.) if mentioned.
+
+Keep it professional and focused on facts relevant to API developers."""
 
         response3, error3 = self.llm.query(prompt3)
         
@@ -632,10 +1444,17 @@ Keep it professional and focused on the facts."""
 
 {item.description if item.description else 'See link for full details.'}"""
         
-        return True, response1, response3
+        return AnalysisResult(
+            item=item,
+            is_relevant=True,
+            summary=response1,
+            issue_body=response3,
+            resolves_watchlist=resolves_watchlist
+        )
     
     def _analyze_items_parallel(self, items: List[ContentItem], 
-                                 handled: List[HandledRelease]) -> List[Tuple[ContentItem, str, str]]:
+                                handled: List[HandledRelease], 
+                                watchlist_items: List[WatchlistItem]) -> List[AnalysisResult]:
         """Analyze multiple items in parallel."""
         # Filter out already handled items first
         to_analyze = [item for item in items if not self._is_handled(item, handled)]
@@ -649,16 +1468,16 @@ Keep it professional and focused on the facts."""
         
         with ThreadPoolExecutor(max_workers=self.max_llm_workers) as executor:
             future_to_item = {
-                executor.submit(self._analyze_item, item): item 
+                executor.submit(self._analyze_item, item, watchlist_items): item 
                 for item in to_analyze
             }
             
             for future in as_completed(future_to_item):
                 item = future_to_item[future]
                 try:
-                    is_relevant, summary, body = future.result()
-                    if is_relevant:
-                        results.append((item, summary, body))
+                    result = future.result()
+                    if result.is_relevant:
+                        results.append(result)
                 except Exception as e:
                     logger.error(f"Analysis failed for {item.title[:40]}: {e}")
         
@@ -666,30 +1485,36 @@ Keep it professional and focused on the facts."""
         return results
     
     # =========================================================================
-    # GitHub
+    # GitHub Issue Management
     # =========================================================================
     
-    def _create_issue(self, site_info: dict, item: ContentItem, summary: str, body: str) -> Optional[int]:
+    def _create_issue(self, site_info: dict, result: AnalysisResult) -> Optional[int]:
+        """Create a GitHub issue for a relevant release."""
         if not self.github_token or not self.github_repo:
             logger.error("GitHub not configured")
             return None
         
         try:
+            item = result.item
             title = f"{site_info['emoji']} {item.source_name}: {item.title[:70]}"
+            
+            watchlist_note = ""
+            if result.resolves_watchlist:
+                watchlist_note = f"\n\n> 🎯 **Resolves watchlist item #{result.resolves_watchlist}**\n"
             
             full_body = f"""## New Release Detected
 
 **Source:** [{item.source_name}]({item.link})  
 **Detected:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
-
+{watchlist_note}
 ---
 
-{body}
+{result.issue_body}
 
 ---
 
 ### Quick Summary
-{summary}
+{result.summary}
 
 ### Actions
 - [ ] Review the release
@@ -698,90 +1523,70 @@ Keep it professional and focused on the facts."""
 *Auto-generated by AI Website Monitor*
 """
             
-            resp = requests.post(
-                f"https://api.github.com/repos/{self.github_repo}/issues",
-                headers={
-                    'Authorization': f'token {self.github_token}',
-                    'Accept': 'application/vnd.github.v3+json'
-                },
-                json={
-                    'title': title,
-                    'body': full_body,
-                    'labels': ['ai-release', site_info['label'], 'auto-close-7d']
-                },
-                timeout=30
-            )
-            resp.raise_for_status()
+            labels = ['type:release', site_info['label'], 'auto-close-7d']
             
-            issue = resp.json()
-            logger.info(f"✅ Created issue #{issue['number']}")
-            return issue['number']
+            resp = self._github_api('POST', '/issues', json={
+                'title': title,
+                'body': full_body,
+                'labels': labels
+            })
+            
+            if resp:
+                issue = resp.json()
+                logger.info(f"✅ Created issue #{issue['number']}")
+                return issue['number']
             
         except Exception as e:
             logger.error(f"Issue creation failed: {e}")
             self.errors.append(f"Issue creation: {e}")
-            return None
+        
+        return None
     
     def _close_old_issues(self):
-        if not self.github_token or not self.github_repo:
+        """Auto-close issues older than 7 days with auto-close-7d label."""
+        resp = self._github_api('GET', '/issues', params={
+            'labels': 'auto-close-7d',
+            'state': 'open',
+            'per_page': 100
+        })
+        
+        if not resp:
             return
         
-        try:
-            resp = requests.get(
-                f"https://api.github.com/repos/{self.github_repo}/issues",
-                headers={
-                    'Authorization': f'token {self.github_token}',
-                    'Accept': 'application/vnd.github.v3+json'
-                },
-                params={'labels': 'auto-close-7d', 'state': 'open'},
-                timeout=30
-            )
-            resp.raise_for_status()
-            
-            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-            for issue in resp.json():
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        for issue in resp.json():
+            try:
                 created = datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))
                 if created < cutoff:
-                    requests.patch(
-                        f"https://api.github.com/repos/{self.github_repo}/issues/{issue['number']}",
-                        headers={
-                            'Authorization': f'token {self.github_token}',
-                            'Accept': 'application/vnd.github.v3+json'
-                        },
-                        json={'state': 'closed'},
-                        timeout=30
-                    )
+                    self._github_api('PATCH', f'/issues/{issue["number"]}', json={
+                        'state': 'closed'
+                    })
                     logger.info(f"Auto-closed issue #{issue['number']}")
-        except Exception as e:
-            logger.warning(f"Close old issues error: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to close issue #{issue.get('number')}: {e}")
     
     def _create_error_issue(self):
+        """Create an issue summarizing errors from this run."""
         if not self.errors or not self.github_token or not self.github_repo:
             return
         
         try:
-            requests.post(
-                f"https://api.github.com/repos/{self.github_repo}/issues",
-                headers={
-                    'Authorization': f'token {self.github_token}',
-                    'Accept': 'application/vnd.github.v3+json'
-                },
-                json={
-                    'title': '⚠️ Monitor Errors',
-                    'body': f"**Errors:**\n" + '\n'.join(f"- {e}" for e in self.errors),
-                    'labels': ['error']
-                },
-                timeout=30
-            )
+            self._github_api('POST', '/issues', json={
+                'title': '⚠️ Monitor Errors',
+                'body': f"**Errors from run at {datetime.now(timezone.utc).isoformat()}:**\n\n" + 
+                        '\n'.join(f"- {e}" for e in self.errors),
+                'labels': ['type:bug']
+            })
         except Exception as e:
             logger.error(f"Error issue creation failed: {e}")
     
     # =========================================================================
-    # Main
+    # Main Processing
     # =========================================================================
     
     def _process_site(self, site_key: str, site_info: dict, 
-                       handled: List[HandledRelease]) -> List[Tuple[ContentItem, str, str]]:
+                      handled: List[HandledRelease], 
+                      watchlist_items: List[WatchlistItem]) -> List[AnalysisResult]:
         """Process a single site: extract, fetch articles, analyze."""
         logger.info(f"\n{'='*50}")
         logger.info(f"Processing: {site_info['name']}")
@@ -815,27 +1620,82 @@ Keep it professional and focused on the facts."""
         new_items = self._fetch_articles_parallel(new_items, site_info['base_url'])
         
         # Analyze items in parallel
-        results = self._analyze_items_parallel(new_items, handled)
+        results = self._analyze_items_parallel(new_items, handled, watchlist_items)
         
         return results
     
     def check_all_websites(self):
+        """Main entry point: check all websites for new releases."""
         logger.info("=" * 60)
         logger.info(f"Monitor started: {datetime.now(timezone.utc)}")
         logger.info(f"Limits: {self.time_window_days} days OR {self.max_items_per_source} items per source")
         logger.info("=" * 60)
         
+        # Ensure labels exist
+        self._ensure_labels_exist()
+        
+        # Process false positives from previous runs
+        self._process_false_positives()
+        
+        # Fetch and process watchlist
+        watchlist_issues = self._fetch_open_watchlist_issues()
+        watchlist_items = []
+        for issue in watchlist_issues:
+            item = self._parse_watchlist_issue(issue)
+            if item:
+                watchlist_items.append(item)
+        
+        logger.info(f"Loaded {len(watchlist_items)} watchlist items")
+        
+        # Close expired watchlist items
+        self._close_expired_watchlist(watchlist_items)
+        
+        # Regenerate watchlist.md from remaining open items
+        watchlist_issues = self._fetch_open_watchlist_issues()
+        watchlist_items = []
+        for issue in watchlist_issues:
+            item = self._parse_watchlist_issue(issue)
+            if item:
+                watchlist_items.append(item)
+        
+        watchlist_md = self._generate_watchlist_md(watchlist_items)
+        watchlist_path = self.storage_dir / "watchlist.md"
+        
+        existing_watchlist = ""
+        if watchlist_path.exists():
+            existing_watchlist = watchlist_path.read_text()
+        
+        existing_no_ts = re.sub(r'Last updated:.*', '', existing_watchlist)
+        new_no_ts = re.sub(r'Last updated:.*', '', watchlist_md)
+        
+        if existing_no_ts.strip() != new_no_ts.strip():
+            watchlist_path.write_text(watchlist_md)
+            logger.info("Updated watchlist.md")
+        
+        # Load context files for analysis
+        self._watchlist_content, self._mistakes_content = self._load_context_files()
+        
+        # Pre-fetch known models
+        logger.info("Fetching current model lists from provider documentation...")
+        known_models = self._fetch_known_models()
+        total_models = sum(len(v) for v in known_models.values())
+        logger.info(f"Loaded {total_models} known models across all providers")
+        
+        # Close old issues
         self._close_old_issues()
         
+        # Load handled releases
         handled = self._load_handled()
         logger.info(f"Loaded {len(handled)} previously handled releases")
         
-        # Process all sites in parallel
-        all_results: List[Tuple[str, dict, ContentItem, str, str]] = []
+        # Process all sites
+        all_results: List[Tuple[str, dict, AnalysisResult]] = []
         
         with ThreadPoolExecutor(max_workers=len(self.websites)) as executor:
             future_to_site = {
-                executor.submit(self._process_site, key, info, handled): (key, info)
+                executor.submit(
+                    self._process_site, key, info, handled, watchlist_items
+                ): (key, info)
                 for key, info in self.websites.items()
             }
             
@@ -843,31 +1703,47 @@ Keep it professional and focused on the facts."""
                 site_key, site_info = future_to_site[future]
                 try:
                     results = future.result()
-                    for item, summary, body in results:
-                        all_results.append((site_key, site_info, item, summary, body))
+                    for result in results:
+                        all_results.append((site_key, site_info, result))
                 except Exception as e:
                     logger.error(f"Site processing failed for {site_info['name']}: {e}")
                     self.errors.append(f"{site_info['name']}: {e}")
         
         # Create issues
         issues_created = 0
-        for site_key, site_info, item, summary, body in all_results:
-            issue_num = self._create_issue(site_info, item, summary, body)
+        for site_key, site_info, result in all_results:
+            issue_num = self._create_issue(site_info, result)
             if issue_num:
                 issues_created += 1
                 handled.append(HandledRelease(
-                    id=item.id,
-                    title=item.title,
-                    link=item.link,
+                    id=result.item.id,
+                    title=result.item.title,
+                    link=result.item.link,
                     issue_number=issue_num,
                     detected_at=datetime.now(timezone.utc).isoformat()
                 ))
+                
+                if result.resolves_watchlist:
+                    self._resolve_watchlist_item(result.resolves_watchlist, issue_num)
         
         self._save_handled(handled)
         
         if self.errors:
             logger.warning(f"⚠️ {len(self.errors)} errors occurred")
             self._create_error_issue()
+        
+        # GitHub Actions annotations
+        if os.getenv('GITHUB_ACTIONS'):
+            if issues_created:
+                print(f"::notice::Created {issues_created} issue(s)")
+                for site_key, site_info, result in all_results:
+                    print(f"::notice title={site_info['name']}::{result.item.title[:80]}")
+            else:
+                print("::notice::No new releases detected")
+            
+            if self.errors:
+                for error in self.errors:
+                    print(f"::warning::{error}")
         
         logger.info("=" * 60)
         if issues_created:
