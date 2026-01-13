@@ -1,0 +1,40 @@
+{
+  "releases": [
+    {
+      "id": "fae030e5a9938755",
+      "title": "January 13, 2026",
+      "link": "https://ai.google.dev/gemini-api/docs/changelog",
+      "issue_number": 21,
+      "detected_at": "2026-01-13T23:42:38.095583+00:00"
+    },
+    {
+      "id": "7b0cdfba570384d4",
+      "title": "January 8, 2026",
+      "link": "https://ai.google.dev/gemini-api/docs/changelog",
+      "issue_number": 22,
+      "detected_at": "2026-01-13T23:42:38.507114+00:00"
+    },
+    {
+      "id": "cb28962cef8e30b4",
+      "title": "January 12, 2026",
+      "link": "https://ai.google.dev/gemini-api/docs/changelog",
+      "issue_number": 23,
+      "detected_at": "2026-01-13T23:42:38.871583+00:00"
+    },
+    {
+      "id": "069d5dfc4e85accd",
+      "title": "Netomi\u2019s lessons for scaling agentic systems into the enterprise",
+      "link": "https://openai.com/index/netomi",
+      "issue_number": 24,
+      "detected_at": "2026-01-13T23:42:39.318598+00:00"
+    },
+    {
+      "id": "694dab4bf3b5a8cb",
+      "title": "How Tolan builds voice-first AI with GPT-5.1",
+      "link": "https://openai.com/index/tolan",
+      "issue_number": 25,
+      "detected_at": "2026-01-13T23:42:39.771559+00:00"
+    }
+  ],
+  "updated": "2026-01-13T23:42:39.771991+00:00"
+}
