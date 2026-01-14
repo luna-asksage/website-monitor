@@ -1,0 +1,26 @@
+{
+  "releases": [
+    {
+      "id": "fae030e5a9938755",
+      "title": "January 13, 2026",
+      "link": "https://ai.google.dev/gemini-api/docs/changelog",
+      "issue_number": 26,
+      "detected_at": "2026-01-14T00:35:58.245444+00:00"
+    },
+    {
+      "id": "cb28962cef8e30b4",
+      "title": "January 12, 2026",
+      "link": "https://ai.google.dev/gemini-api/docs/changelog",
+      "issue_number": 27,
+      "detected_at": "2026-01-14T00:35:58.671550+00:00"
+    },
+    {
+      "id": "7b0cdfba570384d4",
+      "title": "January 8, 2026",
+      "link": "https://ai.google.dev/gemini-api/docs/changelog",
+      "issue_number": 28,
+      "detected_at": "2026-01-14T00:35:59.192043+00:00"
+    }
+  ],
+  "updated": "2026-01-14T00:35:59.192417+00:00"
+}
