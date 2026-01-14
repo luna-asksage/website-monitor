@@ -94,6 +94,10 @@ class AnalysisResult:
 # =============================================================================
 # Required Labels
 # =============================================================================
+# Note: We use labels with "type:" prefix for categorization (e.g., "type:release").
+# This is a naming convention, NOT GitHub's "issue types" feature which requires
+# organization-level configuration and GitHub Projects. Labels work universally
+# across all repository types and don't require special permissions.
 
 REQUIRED_LABELS = [
     {"name": "type:release", "color": "0E8A16", "description": "AI release/update detected"},
@@ -291,6 +295,12 @@ class WebsiteMonitor:
                         else:
                             default_config[key] = loaded[key]
                 return default_config
+        except FileNotFoundError:
+            logger.info(f"Config file {config_path} not found, using defaults")
+            return default_config
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in {config_path}: {e}")
+            return default_config
         except Exception as e:
             logger.warning(f"Config load error: {e}, using defaults")
             return default_config
@@ -338,8 +348,21 @@ class WebsiteMonitor:
         return ''
     
     def _github_api(self, method: str, endpoint: str, **kwargs) -> Optional[requests.Response]:
-        """Make a GitHub API request."""
+        """
+        Make a GitHub API request.
+        
+        Args:
+            method: HTTP method (GET, POST, PATCH, etc.)
+            endpoint: API endpoint (e.g., '/issues')
+            **kwargs: Additional arguments passed to requests.request()
+        
+        Returns:
+            Response object on success, None on failure.
+            Failures are logged with details but not added to self.errors
+            (callers decide if the error is workflow-critical).
+        """
         if not self.github_token or not self.github_repo:
+            logger.debug(f"GitHub API call skipped ({method} {endpoint}): not configured")
             return None
         
         url = f"https://api.github.com/repos/{self.github_repo}{endpoint}"
@@ -352,8 +375,29 @@ class WebsiteMonitor:
             resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
             resp.raise_for_status()
             return resp
-        except Exception as e:
-            logger.error(f"GitHub API error ({method} {endpoint}): {e}")
+        except requests.exceptions.Timeout:
+            logger.error(f"GitHub API timeout ({method} {endpoint})")
+            return None
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code if e.response is not None else 'unknown'
+            logger.error(f"GitHub API HTTP {status_code} ({method} {endpoint}): {e}")
+            if status_code == 403:
+                logger.warning("GitHub API 403: possible rate limit or insufficient permissions")
+            elif status_code == 404:
+                logger.warning(f"GitHub API 404: endpoint or resource not found: {endpoint}")
+            elif status_code == 422:
+                # Unprocessable entity - often means validation error
+                try:
+                    error_body = e.response.json()
+                    logger.error(f"GitHub API validation error: {error_body}")
+                except Exception:
+                    pass
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"GitHub API connection error ({method} {endpoint}): {e}")
+            return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f"GitHub API request failed ({method} {endpoint}): {e}")
             return None
     
     # =========================================================================
@@ -367,14 +411,18 @@ class WebsiteMonitor:
         
         resp = self._github_api('GET', '/labels', params={'per_page': 100})
         if not resp:
+            logger.warning("Could not fetch existing labels, skipping label creation")
             return
         
         existing = {label['name'].lower() for label in resp.json()}
         
         for label in REQUIRED_LABELS:
             if label['name'].lower() not in existing:
-                self._github_api('POST', '/labels', json=label)
-                logger.info(f"Created label: {label['name']}")
+                result = self._github_api('POST', '/labels', json=label)
+                if result:
+                    logger.info(f"Created label: {label['name']}")
+                else:
+                    logger.warning(f"Failed to create label: {label['name']}")
     
     # =========================================================================
     # Known Models
@@ -388,6 +436,8 @@ class WebsiteMonitor:
                 with open(cache_path) as f:
                     data = json.load(f)
                     return data.get('models', {})
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid JSON in cached models file: {e}")
         except Exception as e:
             logger.warning(f"Could not load cached models: {e}")
         return {}
@@ -398,7 +448,7 @@ class WebsiteMonitor:
         try:
             with open(cache_path, 'w') as f:
                 json.dump({
-                        'models': models,
+                    'models': models,
                     'updated': datetime.now(timezone.utc).isoformat()
                 }, f, indent=2)
         except Exception as e:
@@ -434,6 +484,8 @@ class WebsiteMonitor:
                 logger.info(f"Anthropic: {len(models['anthropic'])} models total")
             else:
                 logger.warning(f"Anthropic models fetch failed: HTTP {resp.status_code}")
+        except requests.exceptions.Timeout:
+            logger.warning("Anthropic models fetch timed out")
         except Exception as e:
             logger.warning(f"Failed to fetch Anthropic models: {e}")
         
@@ -443,7 +495,7 @@ class WebsiteMonitor:
             if resp.ok:
                 text = resp.text.lower()
                 openai_patterns = [
-                        r'gpt-[\w\d.-]+',
+                    r'gpt-[\w\d.-]+',
                     r'o[1-9]-[\w-]+',
                     r'o[1-9](?!\w)',
                     r'davinci-[\w\d-]+',
@@ -460,6 +512,8 @@ class WebsiteMonitor:
                 logger.info(f"OpenAI: {len(models['openai'])} models total")
             else:
                 logger.warning(f"OpenAI models fetch failed: HTTP {resp.status_code}")
+        except requests.exceptions.Timeout:
+            logger.warning("OpenAI models fetch timed out")
         except Exception as e:
             logger.warning(f"Failed to fetch OpenAI models: {e}")
         
@@ -478,13 +532,15 @@ class WebsiteMonitor:
                 logger.info(f"Google: {len(models['google'])} models total")
             else:
                 logger.warning(f"Google models fetch failed: HTTP {resp.status_code}")
+        except requests.exceptions.Timeout:
+            logger.warning("Google models fetch timed out")
         except Exception as e:
             logger.warning(f"Failed to fetch Google models: {e}")
         
         # Apply fallbacks only if we have NO models for a provider
         if not models.get('anthropic'):
             models['anthropic'] = [
-                    'claude-4.5-opus', 'claude-4.5-sonnet', 'claude-4.5-haiku',
+                'claude-4.5-opus', 'claude-4.5-sonnet', 'claude-4.5-haiku',
                 'claude-4-opus', 'claude-4-sonnet',
                 'claude-3.5-opus', 'claude-3.5-sonnet', 'claude-3.5-haiku',
                 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku'
@@ -494,7 +550,7 @@ class WebsiteMonitor:
         
         if not models.get('openai'):
             models['openai'] = [
-                    'gpt-5', 'gpt-5-turbo', 'gpt-4.5', 'gpt-4.5-turbo',
+                'gpt-5', 'gpt-5-turbo', 'gpt-4.5', 'gpt-4.5-turbo',
                 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4',
                 'o1', 'o1-preview', 'o1-mini', 'o3', 'o3-mini',
                 'gpt-3.5-turbo'
@@ -504,7 +560,7 @@ class WebsiteMonitor:
         
         if not models.get('google'):
             models['google'] = [
-                    'gemini-3-pro', 'gemini-3-flash',
+                'gemini-3-pro', 'gemini-3-flash',
                 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite',
                 'gemini-2.0-flash', 'gemini-2.0-flash-lite',
                 'gemini-1.5-pro', 'gemini-1.5-flash'
@@ -733,48 +789,48 @@ class WebsiteMonitor:
                 break
         
         prompt = f"""<task>
-    Learn from a classification mistake to prevent similar errors in the future.
-    </task>
+Learn from a classification mistake to prevent similar errors in the future.
+</task>
 
-    <false_positive>
-    <title>{title}</title>
-    <source>{source}</source>
-    <issue_body>
-    {body[:2500]}
-    </issue_body>
-    </false_positive>
+<false_positive>
+<title>{title}</title>
+<source>{source}</source>
+<issue_body>
+{body[:2500]}
+</issue_body>
+</false_positive>
 
-    <user_feedback>
-    {feedback}
-    </user_feedback>
+<user_feedback>
+{feedback}
+</user_feedback>
 
-    <instructions>
-    Generate a concise lesson (2-4 sentences) that will prevent this type of mistake.
+<instructions>
+Generate a concise lesson (2-4 sentences) that will prevent this type of mistake.
 
-    Structure your lesson as:
-    1. WHAT went wrong (the pattern that caused the error)
-    2. WHAT TO DO instead (positive guidance)
-    3. WHAT NOT TO DO (negative guidance)
+Structure your lesson as:
+1. WHAT went wrong (the pattern that caused the error)
+2. WHAT TO DO instead (positive guidance)
+3. WHAT NOT TO DO (negative guidance)
 
-    Be specific - reference the exact type of content, keywords, or patterns to watch for.
-    </instructions>
+Be specific - reference the exact type of content, keywords, or patterns to watch for.
+</instructions>
 
-    <categories>
-    Choose the single best category:
-    - hallucinated_model: LLM imagined a model that doesn't exist
-    - existing_model: Treated an existing model as new
-    - consumer_not_api: Confused consumer product for API announcement  
-    - case_study: Flagged a customer story as a release
-    - partnership: Flagged business news as technical release
-    - policy_research: Flagged policy/research as technical release
-    - changelog_noise: Flagged minor changelog update that wasn't significant
-    - other: None of the above
-    </categories>
+<categories>
+Choose the single best category:
+- hallucinated_model: LLM imagined a model that doesn't exist
+- existing_model: Treated an existing model as new
+- consumer_not_api: Confused consumer product for API announcement  
+- case_study: Flagged a customer story as a release
+- partnership: Flagged business news as technical release
+- policy_research: Flagged policy/research as technical release
+- changelog_noise: Flagged minor changelog update that wasn't significant
+- other: None of the above
+</categories>
 
-    <output_format>
-    LESSON: [Your 2-4 sentence lesson with specific patterns to watch for]
-    CATEGORY: [single category from list above]
-    </output_format>"""
+<output_format>
+LESSON: [Your 2-4 sentence lesson with specific patterns to watch for]
+CATEGORY: [single category from list above]
+</output_format>"""
 
         response, error = self.llm.query(prompt)
         
@@ -1073,9 +1129,15 @@ class WebsiteMonitor:
             
             logger.info(f"RSS: {len(items)} items from {source_name} (limit: {self.max_items_per_source}, window: {self.time_window_days}d)")
             
-        except Exception as e:
+        except requests.exceptions.Timeout:
+            logger.error(f"RSS extraction timed out for {url}")
+            self.errors.append(f"RSS timeout ({source_name})")
+        except requests.exceptions.RequestException as e:
             logger.error(f"RSS extraction failed for {url}: {e}")
             self.errors.append(f"RSS error ({source_name}): {e}")
+        except Exception as e:
+            logger.error(f"RSS parsing failed for {url}: {e}")
+            self.errors.append(f"RSS parse error ({source_name}): {e}")
         
         return items
     
@@ -1147,9 +1209,15 @@ class WebsiteMonitor:
             
             logger.info(f"Anthropic: {len(items)} items (limit: {self.max_items_per_source}, window: {self.time_window_days}d)")
             
-        except Exception as e:
+        except requests.exceptions.Timeout:
+            logger.error(f"Anthropic extraction timed out")
+            self.errors.append(f"Anthropic timeout")
+        except requests.exceptions.RequestException as e:
             logger.error(f"Anthropic extraction failed: {e}")
             self.errors.append(f"Anthropic error: {e}")
+        except Exception as e:
+            logger.error(f"Anthropic parsing failed: {e}")
+            self.errors.append(f"Anthropic parse error: {e}")
         
         return items
     
@@ -1200,9 +1268,15 @@ class WebsiteMonitor:
             
             logger.info(f"Gemini: {len(items)} items (limit: {self.max_items_per_source}, window: {self.time_window_days}d)")
             
-        except Exception as e:
+        except requests.exceptions.Timeout:
+            logger.error(f"Gemini extraction timed out")
+            self.errors.append(f"Gemini timeout")
+        except requests.exceptions.RequestException as e:
             logger.error(f"Gemini extraction failed: {e}")
             self.errors.append(f"Gemini error: {e}")
+        except Exception as e:
+            logger.error(f"Gemini parsing failed: {e}")
+            self.errors.append(f"Gemini parse error: {e}")
         
         return items
     
@@ -1265,6 +1339,8 @@ class WebsiteMonitor:
                 with open(db) as f:
                     data = json.load(f)
                     return [HandledRelease.from_dict(r) for r in data.get('releases', [])]
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid JSON in handled releases: {e}")
         except Exception as e:
             logger.warning(f"Could not load handled releases: {e}")
         return []
@@ -1280,7 +1356,7 @@ class WebsiteMonitor:
                     dt = datetime.fromisoformat(r.detected_at.replace('Z', '+00:00'))
                     if dt >= cutoff:
                         recent.append(r)
-                except:
+                except Exception:
                     recent.append(r)
             
             with open(db, 'w') as f:
@@ -1302,36 +1378,36 @@ class WebsiteMonitor:
     # =========================================================================
     
     def _analyze_item(self, item: ContentItem, 
-                    watchlist_items: List[WatchlistItem]) -> AnalysisResult:
+                      watchlist_items: List[WatchlistItem]) -> AnalysisResult:
         """Analyze a single item to determine if it's a relevant release."""
         
         # Build article content block
         article_content = f"""<article>
-    <title>{item.title}</title>
-    <source>{item.source_name}</source>
-    <date>{item.date or 'Unknown'}</date>
-    <link>{item.link}</link>
-    <description>{item.description or ''}</description>
-    """
+<title>{item.title}</title>
+<source>{item.source_name}</source>
+<date>{item.date or 'Unknown'}</date>
+<link>{item.link}</link>
+<description>{item.description or ''}</description>
+"""
         if item.full_content:
             article_content += f"<full_content>\n{item.full_content[:6000]}\n</full_content>\n"
         article_content += "</article>"
         
         # Query 1: Summarize
         prompt1 = f"""<task>
-    Summarize what this article is announcing or discussing. Be factual and specific.
-    </task>
+Summarize what this article is announcing or discussing. Be factual and specific.
+</task>
 
-    {article_content}
+{article_content}
 
-    <instructions>
-    In 2-3 sentences, state:
-    1. What type of content this is (announcement, case study, blog post, changelog, policy update, etc.)
-    2. The main topic or news
-    3. Any specific product names, model names, or version numbers mentioned
+<instructions>
+In 2-3 sentences, state:
+1. What type of content this is (announcement, case study, blog post, changelog, policy update, etc.)
+2. The main topic or news
+3. Any specific product names, model names, or version numbers mentioned
 
-    Be precise. Do not infer or assume - only state what is explicitly in the article.
-    </instructions>"""
+Be precise. Do not infer or assume - only state what is explicitly in the article.
+</instructions>"""
 
         response1, error1 = self.llm.query(prompt1)
         
@@ -1351,17 +1427,17 @@ class WebsiteMonitor:
         
         # Format watchlist and mistakes for prompt
         watchlist_context = self._format_watchlist_for_prompt(
-                self._watchlist_content or "", 
+            self._watchlist_content or "", 
             item.source_name
         )
         mistakes_context = self._format_mistakes_for_prompt(
-                self._mistakes_content or ""
+            self._mistakes_content or ""
         )
         
         # Check token budget
         base_prompt_size = len(response1) + len(models_list) + 2000  # estimate
         strategy = self._calculate_token_budget(
-                article_content, str(base_prompt_size), watchlist_context, mistakes_context
+            article_content, str(base_prompt_size), watchlist_context, mistakes_context
         )
         
         # Build extra context based on strategy
@@ -1374,77 +1450,77 @@ class WebsiteMonitor:
         
         # Query 2: Classification with strict exclusion logic
         prompt2 = f"""<role>
-    You are a strict classifier for an API developer notification system.
-    Your job is to filter OUT irrelevant content. When uncertain, reject.
-    False positives waste developer time. False negatives can be caught next cycle.
-    </role>
+You are a strict classifier for an API developer notification system.
+Your job is to filter OUT irrelevant content. When uncertain, reject.
+False positives waste developer time. False negatives can be caught next cycle.
+</role>
 
-    <article_summary>
-    Title: {item.title}
-    Source: {item.source_name}
-    Summary: {response1}
-    </article_summary>
+<article_summary>
+Title: {item.title}
+Source: {item.source_name}
+Summary: {response1}
+</article_summary>
 
-    <critical_exclusions>
-    IMMEDIATELY REJECT if ANY of these apply:
+<critical_exclusions>
+IMMEDIATELY REJECT if ANY of these apply:
 
-    1. CASE STUDY: Article title contains "How [Company]...", "[Company]'s lessons...", 
-    "Building with...", or describes a customer's experience using AI
-    → These describe existing capabilities, NOT new releases
-    
-    2. PARTNERSHIP/BUSINESS: Announces partnerships, investments, data centers, 
-    hiring, acquisitions, or corporate news
-    → Not relevant to API developers
-    
-    3. CONSUMER PRODUCT: About ChatGPT, Claude App, Gemini App, AI Studio, 
-    or subscription tiers (Plus, Pro, Team, Enterprise plans for consumers)
-    → We only care about API/developer platform changes
-    
-    4. POLICY/RESEARCH: Safety policies, research papers, responsible AI, 
-    governance frameworks, or thought leadership
-    → Not actionable for developers
-    
-    5. VERTICAL SOLUTIONS: Healthcare solutions, enterprise offerings, 
-    industry-specific products WITHOUT new underlying API capabilities
-    → Marketing, not technical releases
-    
-    6. EXISTING MODELS IN NEW CONTEXT: Article mentions existing models 
-    being used in a new way, new region, or new integration
-    → Model must be genuinely NEW, not existing model in new context
-    </critical_exclusions>
+1. CASE STUDY: Article title contains "How [Company]...", "[Company]'s lessons...", 
+   "Building with...", or describes a customer's experience using AI
+   → These describe existing capabilities, NOT new releases
 
-    <known_models>
-    Models that ALREADY EXIST for {item.source_name}:
-    {models_list}
+2. PARTNERSHIP/BUSINESS: Announces partnerships, investments, data centers, 
+   hiring, acquisitions, or corporate news
+   → Not relevant to API developers
 
-    IMPORTANT: If an article MENTIONS a model not in this list, that does NOT 
-    automatically mean it's a new release. Case studies and blog posts often 
-    contain typos or refer to internal model versions. Only flag as new if 
-    the article is an OFFICIAL ANNOUNCEMENT of a new model release.
-    </known_models>
-    {extra_context}
-    <relevant_criteria>
-    ONLY mark as RELEVANT if the article is an OFFICIAL ANNOUNCEMENT containing:
+3. CONSUMER PRODUCT: About ChatGPT, Claude App, Gemini App, AI Studio, 
+   or subscription tiers (Plus, Pro, Team, Enterprise plans for consumers)
+   → We only care about API/developer platform changes
 
-    - New model release: A genuinely new model announced by {item.source_name} 
-    (not mentioned in a case study or customer story)
-    - New API capability: New endpoints, parameters, features, or rate limits
-    - Pricing changes: Changes to API pricing (not subscription tiers)
-    - SDK/library release: New developer tools or SDK versions
-    - Deprecation notice: Models or API features being deprecated
-    - Breaking changes: Changes requiring developer action
-    - Availability changes: Models moving from preview to GA (especially in new regions)
-    </relevant_criteria>
+4. POLICY/RESEARCH: Safety policies, research papers, responsible AI, 
+   governance frameworks, or thought leadership
+   → Not actionable for developers
 
-    <output_format>
-    Think step by step:
+5. VERTICAL SOLUTIONS: Healthcare solutions, enterprise offerings, 
+   industry-specific products WITHOUT new underlying API capabilities
+   → Marketing, not technical releases
 
-    EXCLUSION_CHECK: [Check each exclusion 1-6. Does any apply? State which one or "None"]
-    ARTICLE_TYPE: [case_study | announcement | changelog | blog_post | policy | other]
-    RELEVANT: [YES or NO]
-    REASON: [One specific sentence explaining your decision]
-    RESOLVES_WATCHLIST: #[issue_number] (only if applicable, otherwise omit this line)
-    </output_format>"""
+6. EXISTING MODELS IN NEW CONTEXT: Article mentions existing models 
+   being used in a new way, new region, or new integration
+   → Model must be genuinely NEW, not existing model in new context
+</critical_exclusions>
+
+<known_models>
+Models that ALREADY EXIST for {item.source_name}:
+{models_list}
+
+IMPORTANT: If an article MENTIONS a model not in this list, that does NOT 
+automatically mean it's a new release. Case studies and blog posts often 
+contain typos or refer to internal model versions. Only flag as new if 
+the article is an OFFICIAL ANNOUNCEMENT of a new model release.
+</known_models>
+{extra_context}
+<relevant_criteria>
+ONLY mark as RELEVANT if the article is an OFFICIAL ANNOUNCEMENT containing:
+
+- New model release: A genuinely new model announced by {item.source_name} 
+  (not mentioned in a case study or customer story)
+- New API capability: New endpoints, parameters, features, or rate limits
+- Pricing changes: Changes to API pricing (not subscription tiers)
+- SDK/library release: New developer tools or SDK versions
+- Deprecation notice: Models or API features being deprecated
+- Breaking changes: Changes requiring developer action
+- Availability changes: Models moving from preview to GA (especially in new regions)
+</relevant_criteria>
+
+<output_format>
+Think step by step:
+
+EXCLUSION_CHECK: [Check each exclusion 1-6. Does any apply? State which one or "None"]
+ARTICLE_TYPE: [case_study | announcement | changelog | blog_post | policy | other]
+RELEVANT: [YES or NO]
+REASON: [One specific sentence explaining your decision]
+RESOLVES_WATCHLIST: #[issue_number] (only if applicable, otherwise omit this line)
+</output_format>"""
 
         response2, error2 = self.llm.query(prompt2)
         
@@ -1456,20 +1532,20 @@ class WebsiteMonitor:
         if strategy == 'split':
             if watchlist_context:
                 watchlist_prompt = f"""<context>
-    Article: {item.title}
-    Source: {item.source_name}
-    Summary: {response1}
-    </context>
+Article: {item.title}
+Source: {item.source_name}
+Summary: {response1}
+</context>
 
-    {watchlist_context}
+{watchlist_context}
 
-    <task>
-    Does this article resolve any watchlist item?
-    </task>
+<task>
+Does this article resolve any watchlist item?
+</task>
 
-    <output>
-    RESOLVES_WATCHLIST: #[issue_number] or NONE
-    </output>"""
+<output>
+RESOLVES_WATCHLIST: #[issue_number] or NONE
+</output>"""
                 
                 wl_response, wl_error = self.llm.query(watchlist_prompt)
                 if not wl_error and wl_response:
@@ -1477,34 +1553,34 @@ class WebsiteMonitor:
             
             if mistakes_context:
                 mistakes_prompt = f"""<context>
-    Article: {item.title}
-    Source: {item.source_name}  
-    Summary: {response1}
-    Classification so far: {response2[:500]}
-    </context>
+Article: {item.title}
+Source: {item.source_name}  
+Summary: {response1}
+Classification so far: {response2[:500]}
+</context>
 
-    {mistakes_context}
+{mistakes_context}
 
-    <task>
-    Would marking this article as RELEVANT repeat any past mistake listed above?
-    </task>
+<task>
+Would marking this article as RELEVANT repeat any past mistake listed above?
+</task>
 
-    <output>
-    REPEAT_MISTAKE: YES or NO
-    WHICH_MISTAKE: [If yes, which one]
-    </output>"""
+<output>
+REPEAT_MISTAKE: YES or NO
+WHICH_MISTAKE: [If yes, which one]
+</output>"""
                 
                 m_response, m_error = self.llm.query(mistakes_prompt)
                 if not m_error and m_response and 'YES' in m_response.upper():
                     logger.info(f"Rejected by mistakes check: {item.title[:40]}")
                     return AnalysisResult(
-                            item=item, 
+                        item=item, 
                         is_relevant=False, 
                         summary=response1, 
                         issue_body=""
                     )
         
-        # Parse response
+        # Parse response with improved flexibility
         is_relevant = False
         reason = response2
         resolves_watchlist = None
@@ -1518,7 +1594,7 @@ class WebsiteMonitor:
             if exclusion_text and 'none' not in exclusion_text and len(exclusion_text) > 5:
                 logger.info(f"Excluded by rule: {item.title[:40]}... - {exclusion_text[:50]}")
                 return AnalysisResult(
-                        item=item,
+                    item=item,
                     is_relevant=False,
                     summary=response1,
                     issue_body=""
@@ -1533,16 +1609,71 @@ class WebsiteMonitor:
         if article_type in ['case_study', 'blog_post', 'policy']:
             logger.info(f"Rejected by type ({article_type}): {item.title[:40]}")
             return AnalysisResult(
-                    item=item,
+                item=item,
                 is_relevant=False,
                 summary=response1,
                 issue_body=""
             )
         
-        response2_upper = response2.upper()
-        if 'RELEVANT: YES' in response2_upper or 'RELEVANT:YES' in response2_upper:
-            is_relevant = True
+        # Parse RELEVANT field with flexible regex
+        # Handles: "RELEVANT: YES", "RELEVANT:YES", "RELEVANT: YES - because...", "RELEVANT: yes"
+        relevant_match = re.search(r'RELEVANT:\s*(YES|NO)\b', response2, re.IGNORECASE)
+        if relevant_match:
+            is_relevant = relevant_match.group(1).upper() == 'YES'
+        else:
+            # RELEVANT field not found - check for unstructured response indicating relevance
+            # This is a warning case - the LLM didn't follow instructions
+            # Check if response starts with YES/NO without proper format
+            stripped_response = response2.strip()
+            if re.match(r'^YES\b', stripped_response, re.IGNORECASE):
+                logger.warning(
+                    f"LLM response missing 'RELEVANT:' prefix but starts with YES - "
+                    f"treating as relevant with warning: {item.title[:40]}"
+                )
+                if os.getenv('GITHUB_ACTIONS'):
+                    print(f"::warning title=LLM Format Issue::Response missing RELEVANT: prefix for: {item.title[:60]}")
+                is_relevant = True
+            elif re.match(r'^NO\b', stripped_response, re.IGNORECASE):
+                logger.warning(
+                    f"LLM response missing 'RELEVANT:' prefix but starts with NO - "
+                    f"treating as not relevant: {item.title[:40]}"
+                )
+                is_relevant = False
+            else:
+                # Can't determine relevance from response format
+                logger.warning(
+                    f"LLM response missing 'RELEVANT:' field entirely - "
+                    f"defaulting to NOT relevant for safety: {item.title[:40]}"
+                )
+                if os.getenv('GITHUB_ACTIONS'):
+                    print(f"::warning title=LLM Format Issue::Cannot parse RELEVANT field for: {item.title[:60]}")
+                is_relevant = False
         
+        # Validate response format when marking as relevant
+        if is_relevant:
+            has_exclusion = bool(re.search(r'EXCLUSION_CHECK:', response2, re.IGNORECASE))
+            has_type = bool(re.search(r'ARTICLE_TYPE:', response2, re.IGNORECASE))
+            has_relevant = bool(re.search(r'RELEVANT:', response2, re.IGNORECASE))
+            has_reason = bool(re.search(r'REASON:', response2, re.IGNORECASE))
+            
+            missing_fields = []
+            if not has_exclusion:
+                missing_fields.append('EXCLUSION_CHECK')
+            if not has_type:
+                missing_fields.append('ARTICLE_TYPE')
+            if not has_relevant:
+                missing_fields.append('RELEVANT')
+            if not has_reason:
+                missing_fields.append('REASON')
+            
+            if missing_fields:
+                logger.warning(
+                    f"LLM response missing expected fields ({', '.join(missing_fields)}): {item.title[:40]}"
+                )
+                if os.getenv('GITHUB_ACTIONS'):
+                    print(f"::warning title=Incomplete LLM Response::Missing {', '.join(missing_fields)} for: {item.title[:60]}")
+        
+        # Extract reason
         if 'REASON:' in response2.upper():
             idx = response2.upper().index('REASON:')
             end_idx = response2.upper().find('RESOLVES_WATCHLIST:', idx)
@@ -1558,7 +1689,7 @@ class WebsiteMonitor:
         if not is_relevant:
             logger.info(f"Not relevant: {item.title[:40]}... - {reason[:50]}")
             return AnalysisResult(
-                    item=item, 
+                item=item, 
                 is_relevant=False, 
                 summary=response1, 
                 issue_body=""
@@ -1570,42 +1701,42 @@ class WebsiteMonitor:
         
         # Query 3: Generate issue body
         prompt3 = f"""<task>
-    Create a GitHub issue body for this AI API release notification.
-    </task>
+Create a GitHub issue body for this AI API release notification.
+</task>
 
-    <article>
-    Title: {item.title}
-    Source: {item.source_name}
-    Link: {item.link}
-    Summary: {response1}
-    </article>
+<article>
+Title: {item.title}
+Source: {item.source_name}
+Link: {item.link}
+Summary: {response1}
+</article>
 
-    <content>
-    {item.full_content[:5000] if item.full_content else item.description}
-    </content>
+<content>
+{item.full_content[:5000] if item.full_content else item.description}
+</content>
 
-    <format>
-    Write a clear, professional Markdown summary including:
+<format>
+Write a clear, professional Markdown summary including:
 
-    ## What's New
-    [Specific details: model names, API endpoints, version numbers, capabilities]
+## What's New
+[Specific details: model names, API endpoints, version numbers, capabilities]
 
-    ## Key Details  
-    [Technical specifics relevant to API developers: pricing, rate limits, parameters]
+## Key Details  
+[Technical specifics relevant to API developers: pricing, rate limits, parameters]
 
-    ## Developer Impact
-    [What developers need to know or do]
+## Developer Impact
+[What developers need to know or do]
 
-    ## Platform Availability
-    [Note if this mentions specific platforms: direct API, AWS Bedrock, Google Cloud Vertex AI, Azure]
-    </format>
+## Platform Availability
+[Note if this mentions specific platforms: direct API, AWS Bedrock, Google Cloud Vertex AI, Azure]
+</format>
 
-    <rules>
-    - Be factual and specific
-    - Include exact model names and version numbers
-    - Note any action items or migration requirements
-    - Keep it concise but complete
-    </rules>"""
+<rules>
+- Be factual and specific
+- Include exact model names and version numbers
+- Note any action items or migration requirements
+- Keep it concise but complete
+</rules>"""
 
         response3, error3 = self.llm.query(prompt3)
         
@@ -1613,14 +1744,14 @@ class WebsiteMonitor:
             logger.error(f"Query 3 failed for {item.title[:40]}: {error3}")
             response3 = f"""## {item.title}
 
-    **Summary:** {response1}
+**Summary:** {response1}
 
-    **Source:** [{item.source_name}]({item.link})
+**Source:** [{item.source_name}]({item.link})
 
-    {item.description if item.description else 'See link for full details.'}"""
+{item.description if item.description else 'See link for full details.'}"""
         
         return AnalysisResult(
-                item=item,
+            item=item,
             is_relevant=True,
             summary=response1,
             issue_body=response3,
@@ -1710,6 +1841,8 @@ class WebsiteMonitor:
                 issue = resp.json()
                 logger.info(f"✅ Created issue #{issue['number']}")
                 return issue['number']
+            else:
+                self.errors.append(f"Issue creation failed for: {item.title[:50]}")
             
         except Exception as e:
             logger.error(f"Issue creation failed: {e}")
@@ -1733,10 +1866,13 @@ class WebsiteMonitor:
             try:
                 created = datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))
                 if created < cutoff:
-                    self._github_api('PATCH', f'/issues/{issue["number"]}', json={
+                    result = self._github_api('PATCH', f'/issues/{issue["number"]}', json={
                         'state': 'closed'
                     })
-                    logger.info(f"Auto-closed issue #{issue['number']}")
+                    if result:
+                        logger.info(f"Auto-closed issue #{issue['number']}")
+                    else:
+                        logger.warning(f"Failed to auto-close issue #{issue['number']}")
             except Exception as e:
                 logger.warning(f"Failed to close issue #{issue.get('number')}: {e}")
     
@@ -1746,12 +1882,16 @@ class WebsiteMonitor:
             return
         
         try:
-            self._github_api('POST', '/issues', json={
+            resp = self._github_api('POST', '/issues', json={
                 'title': '⚠️ Monitor Errors',
                 'body': f"**Errors from run at {datetime.now(timezone.utc).isoformat()}:**\n\n" + 
                         '\n'.join(f"- {e}" for e in self.errors),
                 'labels': ['type:bug']
             })
+            if resp:
+                logger.info(f"Created error issue #{resp.json()['number']}")
+            else:
+                logger.error("Failed to create error issue")
         except Exception as e:
             logger.error(f"Error issue creation failed: {e}")
     
