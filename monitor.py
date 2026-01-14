@@ -379,20 +379,45 @@ class WebsiteMonitor:
     # =========================================================================
     # Known Models
     # =========================================================================
-    
+        
+    def _load_cached_models(self) -> Dict[str, List[str]]:
+        """Load cached models from storage."""
+        cache_path = self.storage_dir / "known_models.json"
+        try:
+            if cache_path.exists():
+                with open(cache_path) as f:
+                    data = json.load(f)
+                    return data.get('models', {})
+        except Exception as e:
+            logger.warning(f"Could not load cached models: {e}")
+        return {}
+
+    def _save_cached_models(self, models: Dict[str, List[str]]):
+        """Save models to cache."""
+        cache_path = self.storage_dir / "known_models.json"
+        try:
+            with open(cache_path, 'w') as f:
+                json.dump({
+                        'models': models,
+                    'updated': datetime.now(timezone.utc).isoformat()
+                }, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not save cached models: {e}")
+
     def _fetch_known_models(self) -> Dict[str, List[str]]:
         """
         Fetch current model lists from each provider's documentation.
-        Returns dict mapping provider name to list of known model identifiers.
+        Uses cached models as base and merges in newly discovered models.
         """
         if self._known_models_cache is not None:
             return self._known_models_cache
         
-        models = {
-            'anthropic': [],
-            'openai': [],
-            'google': []
-        }
+        # Start with cached models
+        models = self._load_cached_models()
+        if not models:
+            models = {'anthropic': [], 'openai': [], 'google': []}
+        
+        models_updated = False
         
         # Anthropic models
         try:
@@ -401,8 +426,14 @@ class WebsiteMonitor:
                 text = resp.text.lower()
                 anthropic_pattern = r'claude-[\w\d.-]+'
                 found = set(re.findall(anthropic_pattern, text))
-                models['anthropic'] = sorted(found)
-                logger.info(f"Found {len(models['anthropic'])} Anthropic models")
+                new_models = found - set(models.get('anthropic', []))
+                if new_models:
+                    models['anthropic'] = sorted(set(models.get('anthropic', [])) | found)
+                    models_updated = True
+                    logger.info(f"Found {len(new_models)} new Anthropic models")
+                logger.info(f"Anthropic: {len(models['anthropic'])} models total")
+            else:
+                logger.warning(f"Anthropic models fetch failed: HTTP {resp.status_code}")
         except Exception as e:
             logger.warning(f"Failed to fetch Anthropic models: {e}")
         
@@ -412,7 +443,7 @@ class WebsiteMonitor:
             if resp.ok:
                 text = resp.text.lower()
                 openai_patterns = [
-                    r'gpt-[\w\d.-]+',
+                        r'gpt-[\w\d.-]+',
                     r'o[1-9]-[\w-]+',
                     r'o[1-9](?!\w)',
                     r'davinci-[\w\d-]+',
@@ -421,8 +452,14 @@ class WebsiteMonitor:
                 found = set()
                 for pattern in openai_patterns:
                     found.update(re.findall(pattern, text))
-                models['openai'] = sorted(found)
-                logger.info(f"Found {len(models['openai'])} OpenAI models")
+                new_models = found - set(models.get('openai', []))
+                if new_models:
+                    models['openai'] = sorted(set(models.get('openai', [])) | found)
+                    models_updated = True
+                    logger.info(f"Found {len(new_models)} new OpenAI models")
+                logger.info(f"OpenAI: {len(models['openai'])} models total")
+            else:
+                logger.warning(f"OpenAI models fetch failed: HTTP {resp.status_code}")
         except Exception as e:
             logger.warning(f"Failed to fetch OpenAI models: {e}")
         
@@ -433,33 +470,51 @@ class WebsiteMonitor:
                 text = resp.text.lower()
                 gemini_pattern = r'gemini-[\w\d.-]+'
                 found = set(re.findall(gemini_pattern, text))
-                models['google'] = sorted(found)
-                logger.info(f"Found {len(models['google'])} Google models")
+                new_models = found - set(models.get('google', []))
+                if new_models:
+                    models['google'] = sorted(set(models.get('google', [])) | found)
+                    models_updated = True
+                    logger.info(f"Found {len(new_models)} new Google models")
+                logger.info(f"Google: {len(models['google'])} models total")
+            else:
+                logger.warning(f"Google models fetch failed: HTTP {resp.status_code}")
         except Exception as e:
             logger.warning(f"Failed to fetch Google models: {e}")
         
-        # Fallbacks if scraping failed
-        if not models['anthropic']:
+        # Apply fallbacks only if we have NO models for a provider
+        if not models.get('anthropic'):
             models['anthropic'] = [
-                'claude-4.5-opus', 'claude-4.5-sonnet', 'claude-4-opus', 'claude-4-sonnet',
-                'claude-3.5-opus', 'claude-3.5-sonnet', 'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku'
+                    'claude-4.5-opus', 'claude-4.5-sonnet', 'claude-4.5-haiku',
+                'claude-4-opus', 'claude-4-sonnet',
+                'claude-3.5-opus', 'claude-3.5-sonnet', 'claude-3.5-haiku',
+                'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku'
             ]
             logger.info("Using fallback Anthropic model list")
+            models_updated = True
         
-        if not models['openai']:
+        if not models.get('openai'):
             models['openai'] = [
-                'gpt-5', 'gpt-5-turbo', 'gpt-4.5', 'gpt-4.5-turbo', 'gpt-4o', 'gpt-4o-mini',
-                'gpt-4-turbo', 'gpt-4', 'o1', 'o1-preview', 'o1-mini', 'o3', 'o3-mini'
+                    'gpt-5', 'gpt-5-turbo', 'gpt-4.5', 'gpt-4.5-turbo',
+                'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4',
+                'o1', 'o1-preview', 'o1-mini', 'o3', 'o3-mini',
+                'gpt-3.5-turbo'
             ]
             logger.info("Using fallback OpenAI model list")
+            models_updated = True
         
-        if not models['google']:
+        if not models.get('google'):
             models['google'] = [
-                'gemini-3-pro', 'gemini-3-flash', 'gemini-2.5-pro', 'gemini-2.5-flash',
-                'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite',
+                    'gemini-3-pro', 'gemini-3-flash',
+                'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite',
+                'gemini-2.0-flash', 'gemini-2.0-flash-lite',
                 'gemini-1.5-pro', 'gemini-1.5-flash'
             ]
             logger.info("Using fallback Google model list")
+            models_updated = True
+        
+        # Save if updated
+        if models_updated:
+            self._save_cached_models(models)
         
         self._known_models_cache = models
         return models
@@ -677,31 +732,49 @@ class WebsiteMonitor:
                 source = label.capitalize()
                 break
         
-        prompt = f"""You incorrectly classified an article as relevant for API developers. Learn from this mistake.
+        prompt = f"""<task>
+    Learn from a classification mistake to prevent similar errors in the future.
+    </task>
 
-ORIGINAL ISSUE TITLE: {title}
+    <false_positive>
+    <title>{title}</title>
+    <source>{source}</source>
+    <issue_body>
+    {body[:2500]}
+    </issue_body>
+    </false_positive>
 
-ORIGINAL ISSUE BODY:
-{body[:3000]}
+    <user_feedback>
+    {feedback}
+    </user_feedback>
 
-USER FEEDBACK (explaining why this was NOT relevant):
-{feedback}
+    <instructions>
+    Generate a concise lesson (2-4 sentences) that will prevent this type of mistake.
 
-Generate a succinct lesson (2-4 sentences) that would prevent this mistake in the future.
-Use both positive guidance (what TO look for) and negative guidance (what NOT to do).
-Focus on the specific pattern that caused the error.
+    Structure your lesson as:
+    1. WHAT went wrong (the pattern that caused the error)
+    2. WHAT TO DO instead (positive guidance)
+    3. WHAT NOT TO DO (negative guidance)
 
-Choose ONE category that best describes this type of mistake:
-- hallucinated_model: LLM imagined a model that doesn't exist or isn't new
-- existing_model: Article discussed an existing model as if it were new
-- consumer_not_api: Article was about consumer products (ChatGPT, Claude App) not API
-- partnership: Article was about partnerships or customer case studies
-- policy_research: Article was about policy, safety, or research papers
-- other: Doesn't fit other categories
+    Be specific - reference the exact type of content, keywords, or patterns to watch for.
+    </instructions>
 
-Respond in EXACTLY this format:
-LESSON: [your 2-4 sentence lesson]
-CATEGORY: [one category from the list above]"""
+    <categories>
+    Choose the single best category:
+    - hallucinated_model: LLM imagined a model that doesn't exist
+    - existing_model: Treated an existing model as new
+    - consumer_not_api: Confused consumer product for API announcement  
+    - case_study: Flagged a customer story as a release
+    - partnership: Flagged business news as technical release
+    - policy_research: Flagged policy/research as technical release
+    - changelog_noise: Flagged minor changelog update that wasn't significant
+    - other: None of the above
+    </categories>
+
+    <output_format>
+    LESSON: [Your 2-4 sentence lesson with specific patterns to watch for]
+    CATEGORY: [single category from list above]
+    </output_format>"""
 
         response, error = self.llm.query(prompt)
         
@@ -1228,23 +1301,37 @@ CATEGORY: [one category from the list above]"""
     # LLM Analysis
     # =========================================================================
     
-    def _analyze_item(self, item: ContentItem, watchlist_items: List[WatchlistItem]) -> AnalysisResult:
+    def _analyze_item(self, item: ContentItem, 
+                    watchlist_items: List[WatchlistItem]) -> AnalysisResult:
         """Analyze a single item to determine if it's a relevant release."""
-        content = f"TITLE: {item.title}\n"
-        content += f"DATE: {item.date}\n" if item.date else ""
-        content += f"SOURCE: {item.source_name}\n"
-        content += f"LINK: {item.link}\n"
-        content += f"\nDESCRIPTION:\n{item.description}\n" if item.description else ""
         
+        # Build article content block
+        article_content = f"""<article>
+    <title>{item.title}</title>
+    <source>{item.source_name}</source>
+    <date>{item.date or 'Unknown'}</date>
+    <link>{item.link}</link>
+    <description>{item.description or ''}</description>
+    """
         if item.full_content:
-            content += f"\nFULL ARTICLE CONTENT:\n{item.full_content}\n"
+            article_content += f"<full_content>\n{item.full_content[:6000]}\n</full_content>\n"
+        article_content += "</article>"
         
         # Query 1: Summarize
-        prompt1 = f"""Read the following article and tell me what it is announcing or discussing.
+        prompt1 = f"""<task>
+    Summarize what this article is announcing or discussing. Be factual and specific.
+    </task>
 
-{content}
+    {article_content}
 
-In 2-3 sentences, what is the main topic or announcement of this article? Be specific - mention any product names, model names, version numbers, or features discussed."""
+    <instructions>
+    In 2-3 sentences, state:
+    1. What type of content this is (announcement, case study, blog post, changelog, policy update, etc.)
+    2. The main topic or news
+    3. Any specific product names, model names, or version numbers mentioned
+
+    Be precise. Do not infer or assume - only state what is explicitly in the article.
+    </instructions>"""
 
         response1, error1 = self.llm.query(prompt1)
         
@@ -1259,78 +1346,105 @@ In 2-3 sentences, what is the main topic or announcement of this article? Be spe
         provider_key = self._get_provider_key(item.source_name)
         provider_models = known_models.get(provider_key, [])
         
-        # Build context components
-        models_context = ""
-        if provider_models:
-            models_context = f"""
-KNOWN MODELS - These models ALREADY EXIST for {item.source_name} (as of today):
-{', '.join(provider_models[:30])}
-
-If the article discusses a model in this list, it is NOT a new model release."""
+        # Build models context
+        models_list = ', '.join(provider_models[:40]) if provider_models else 'Unable to fetch - use fallback judgment'
         
         # Format watchlist and mistakes for prompt
         watchlist_context = self._format_watchlist_for_prompt(
-            self._watchlist_content or "", 
+                self._watchlist_content or "", 
             item.source_name
         )
         mistakes_context = self._format_mistakes_for_prompt(
-            self._mistakes_content or ""
+                self._mistakes_content or ""
         )
         
         # Check token budget
-        base_prompt = f"""Title: {item.title}
-Summary: {response1}
-{models_context}"""
-        
+        base_prompt_size = len(response1) + len(models_list) + 2000  # estimate
         strategy = self._calculate_token_budget(
-            content, base_prompt, watchlist_context, mistakes_context
+                article_content, str(base_prompt_size), watchlist_context, mistakes_context
         )
         
-        # Build Query 2 based on strategy
+        # Build extra context based on strategy
+        extra_context = ""
         if strategy == 'combined':
-            extra_context = ""
             if watchlist_context:
-                extra_context += f"\n\n{watchlist_context}"
+                extra_context += f"\n{watchlist_context}\n"
             if mistakes_context:
-                extra_context += f"\n\n{mistakes_context}"
-        else:
-            extra_context = ""
-            logger.info("Using split query strategy due to token budget")
+                extra_context += f"\n{mistakes_context}\n"
         
-        prompt2 = f"""Based on this summary of an article from {item.source_name}:
+        # Query 2: Classification with strict exclusion logic
+        prompt2 = f"""<role>
+    You are a strict classifier for an API developer notification system.
+    Your job is to filter OUT irrelevant content. When uncertain, reject.
+    False positives waste developer time. False negatives can be caught next cycle.
+    </role>
 
-Title: {item.title}
-Summary: {response1}
-{models_context}
-{extra_context}
+    <article_summary>
+    Title: {item.title}
+    Source: {item.source_name}
+    Summary: {response1}
+    </article_summary>
 
-Determine if this article announces something relevant for API DEVELOPERS.
+    <critical_exclusions>
+    IMMEDIATELY REJECT if ANY of these apply:
 
-RELEVANT (answer YES):
-- A genuinely NEW AI model not in the known models list above
-- New API endpoints, parameters, features, or capabilities
-- Pricing changes for API usage
-- New SDKs, libraries, or developer tools for the API
-- Model deprecations or breaking API changes
-- Significant capability improvements (context window, speed, rate limits, etc.)
-- Updates to Claude Code that affect developers (not new skills/connectors)
-- Availability changes (e.g., a model becoming GA in new regions)
+    1. CASE STUDY: Article title contains "How [Company]...", "[Company]'s lessons...", 
+    "Building with...", or describes a customer's experience using AI
+    → These describe existing capabilities, NOT new releases
+    
+    2. PARTNERSHIP/BUSINESS: Announces partnerships, investments, data centers, 
+    hiring, acquisitions, or corporate news
+    → Not relevant to API developers
+    
+    3. CONSUMER PRODUCT: About ChatGPT, Claude App, Gemini App, AI Studio, 
+    or subscription tiers (Plus, Pro, Team, Enterprise plans for consumers)
+    → We only care about API/developer platform changes
+    
+    4. POLICY/RESEARCH: Safety policies, research papers, responsible AI, 
+    governance frameworks, or thought leadership
+    → Not actionable for developers
+    
+    5. VERTICAL SOLUTIONS: Healthcare solutions, enterprise offerings, 
+    industry-specific products WITHOUT new underlying API capabilities
+    → Marketing, not technical releases
+    
+    6. EXISTING MODELS IN NEW CONTEXT: Article mentions existing models 
+    being used in a new way, new region, or new integration
+    → Model must be genuinely NEW, not existing model in new context
+    </critical_exclusions>
 
-NOT RELEVANT (answer NO):
-- Models that already exist (see list above) being discussed or promoted
-- Consumer product announcements (ChatGPT features, Claude App, Gemini App, AI Studio)
-- Subscription/Plus/Pro tier features for consumers
-- Partnership announcements or customer case studies
-- Healthcare/Enterprise/vertical solutions without new API capabilities
-- Policy updates, safety research, or company news
-- Blog posts explaining how to use existing features
-- Features only for ChatGPT, ChatGPT ATLAS, Claude subscribers, etc.
-- Preview/experimental models that are not Generally Available (unless watchlist item)
+    <known_models>
+    Models that ALREADY EXIST for {item.source_name}:
+    {models_list}
 
-Answer with EXACTLY this format:
-RELEVANT: YES or NO
-REASON: One sentence explaining your decision
-RESOLVES_WATCHLIST: #<issue_number> (only if this resolves a specific watchlist item, otherwise omit)"""
+    IMPORTANT: If an article MENTIONS a model not in this list, that does NOT 
+    automatically mean it's a new release. Case studies and blog posts often 
+    contain typos or refer to internal model versions. Only flag as new if 
+    the article is an OFFICIAL ANNOUNCEMENT of a new model release.
+    </known_models>
+    {extra_context}
+    <relevant_criteria>
+    ONLY mark as RELEVANT if the article is an OFFICIAL ANNOUNCEMENT containing:
+
+    - New model release: A genuinely new model announced by {item.source_name} 
+    (not mentioned in a case study or customer story)
+    - New API capability: New endpoints, parameters, features, or rate limits
+    - Pricing changes: Changes to API pricing (not subscription tiers)
+    - SDK/library release: New developer tools or SDK versions
+    - Deprecation notice: Models or API features being deprecated
+    - Breaking changes: Changes requiring developer action
+    - Availability changes: Models moving from preview to GA (especially in new regions)
+    </relevant_criteria>
+
+    <output_format>
+    Think step by step:
+
+    EXCLUSION_CHECK: [Check each exclusion 1-6. Does any apply? State which one or "None"]
+    ARTICLE_TYPE: [case_study | announcement | changelog | blog_post | policy | other]
+    RELEVANT: [YES or NO]
+    REASON: [One specific sentence explaining your decision]
+    RESOLVES_WATCHLIST: #[issue_number] (only if applicable, otherwise omit this line)
+    </output_format>"""
 
         response2, error2 = self.llm.query(prompt2)
         
@@ -1341,36 +1455,50 @@ RESOLVES_WATCHLIST: #<issue_number> (only if this resolves a specific watchlist 
         # Handle split strategy - additional queries for watchlist and mistakes
         if strategy == 'split':
             if watchlist_context:
-                watchlist_prompt = f"""Given this article summary:
-Title: {item.title}
-Summary: {response1}
+                watchlist_prompt = f"""<context>
+    Article: {item.title}
+    Source: {item.source_name}
+    Summary: {response1}
+    </context>
 
-{watchlist_context}
+    {watchlist_context}
 
-Does this article resolve any watchlist item? Answer with:
-RESOLVES_WATCHLIST: #<issue_number>
-Or if it doesn't resolve any: RESOLVES_WATCHLIST: NONE"""
+    <task>
+    Does this article resolve any watchlist item?
+    </task>
+
+    <output>
+    RESOLVES_WATCHLIST: #[issue_number] or NONE
+    </output>"""
                 
                 wl_response, wl_error = self.llm.query(watchlist_prompt)
                 if not wl_error and wl_response:
                     response2 += "\n" + wl_response
             
             if mistakes_context:
-                mistakes_prompt = f"""Given this article summary:
-Title: {item.title}
-Summary: {response1}
-Source: {item.source_name}
+                mistakes_prompt = f"""<context>
+    Article: {item.title}
+    Source: {item.source_name}  
+    Summary: {response1}
+    Classification so far: {response2[:500]}
+    </context>
 
-{mistakes_context}
+    {mistakes_context}
 
-Would classifying this article as RELEVANT repeat any of the past mistakes listed above?
-Answer: YES (explain which mistake) or NO"""
+    <task>
+    Would marking this article as RELEVANT repeat any past mistake listed above?
+    </task>
+
+    <output>
+    REPEAT_MISTAKE: YES or NO
+    WHICH_MISTAKE: [If yes, which one]
+    </output>"""
                 
                 m_response, m_error = self.llm.query(mistakes_prompt)
                 if not m_error and m_response and 'YES' in m_response.upper():
                     logger.info(f"Rejected by mistakes check: {item.title[:40]}")
                     return AnalysisResult(
-                        item=item, 
+                            item=item, 
                         is_relevant=False, 
                         summary=response1, 
                         issue_body=""
@@ -1380,11 +1508,39 @@ Answer: YES (explain which mistake) or NO"""
         is_relevant = False
         reason = response2
         resolves_watchlist = None
+        article_type = "unknown"
+        
+        # Check for exclusion applied
+        exclusion_match = re.search(r'EXCLUSION_CHECK:\s*(.+?)(?=\n|ARTICLE_TYPE)', response2, re.IGNORECASE | re.DOTALL)
+        if exclusion_match:
+            exclusion_text = exclusion_match.group(1).strip().lower()
+            # If any exclusion was found (not "none"), reject
+            if exclusion_text and 'none' not in exclusion_text and len(exclusion_text) > 5:
+                logger.info(f"Excluded by rule: {item.title[:40]}... - {exclusion_text[:50]}")
+                return AnalysisResult(
+                        item=item,
+                    is_relevant=False,
+                    summary=response1,
+                    issue_body=""
+                )
+        
+        # Extract article type
+        type_match = re.search(r'ARTICLE_TYPE:\s*(\w+)', response2, re.IGNORECASE)
+        if type_match:
+            article_type = type_match.group(1).lower()
+        
+        # Case studies and blog posts are automatically not relevant
+        if article_type in ['case_study', 'blog_post', 'policy']:
+            logger.info(f"Rejected by type ({article_type}): {item.title[:40]}")
+            return AnalysisResult(
+                    item=item,
+                is_relevant=False,
+                summary=response1,
+                issue_body=""
+            )
         
         response2_upper = response2.upper()
         if 'RELEVANT: YES' in response2_upper or 'RELEVANT:YES' in response2_upper:
-            is_relevant = True
-        elif response2_upper.strip().startswith('YES'):
             is_relevant = True
         
         if 'REASON:' in response2.upper():
@@ -1402,50 +1558,69 @@ Answer: YES (explain which mistake) or NO"""
         if not is_relevant:
             logger.info(f"Not relevant: {item.title[:40]}... - {reason[:50]}")
             return AnalysisResult(
-                item=item, 
+                    item=item, 
                 is_relevant=False, 
                 summary=response1, 
                 issue_body=""
             )
         
-        logger.info(f"✓ RELEVANT: {item.title[:40]}... - {reason[:50]}")
+        logger.info(f"✓ RELEVANT ({article_type}): {item.title[:40]}... - {reason[:50]}")
         if resolves_watchlist:
             logger.info(f"  Resolves watchlist item #{resolves_watchlist}")
         
         # Query 3: Generate issue body
-        prompt3 = f"""Create a GitHub issue body summarizing this AI product/API release.
+        prompt3 = f"""<task>
+    Create a GitHub issue body for this AI API release notification.
+    </task>
 
-Title: {item.title}
-Source: {item.source_name}
-Link: {item.link}
-Summary: {response1}
+    <article>
+    Title: {item.title}
+    Source: {item.source_name}
+    Link: {item.link}
+    Summary: {response1}
+    </article>
 
-{f"Full content: {item.full_content[:5000]}" if item.full_content else f"Description: {item.description}"}
+    <content>
+    {item.full_content[:5000] if item.full_content else item.description}
+    </content>
 
-Write a clear, concise summary in Markdown format including:
-- What was released/announced (be specific about model names, API endpoints, etc.)
-- Key features or changes for API developers
-- Technical details (model names, versions, capabilities, pricing if mentioned)
-- Any action items for developers using the API
+    <format>
+    Write a clear, professional Markdown summary including:
 
-Note if this affects specific platforms (AWS Bedrock, Google Cloud Vertex AI, etc.) if mentioned.
+    ## What's New
+    [Specific details: model names, API endpoints, version numbers, capabilities]
 
-Keep it professional and focused on facts relevant to API developers."""
+    ## Key Details  
+    [Technical specifics relevant to API developers: pricing, rate limits, parameters]
+
+    ## Developer Impact
+    [What developers need to know or do]
+
+    ## Platform Availability
+    [Note if this mentions specific platforms: direct API, AWS Bedrock, Google Cloud Vertex AI, Azure]
+    </format>
+
+    <rules>
+    - Be factual and specific
+    - Include exact model names and version numbers
+    - Note any action items or migration requirements
+    - Keep it concise but complete
+    </rules>"""
 
         response3, error3 = self.llm.query(prompt3)
         
         if error3:
             logger.error(f"Query 3 failed for {item.title[:40]}: {error3}")
-            response3 = f"""### {item.title}
+            response3 = f"""## {item.title}
 
-**Summary:** {response1}
+    **Summary:** {response1}
 
-**Source:** [{item.source_name}]({item.link})
+    **Source:** [{item.source_name}]({item.link})
 
-{item.description if item.description else 'See link for full details.'}"""
+    {item.description if item.description else 'See link for full details.'}"""
         
         return AnalysisResult(
-            item=item,
+                item=item,
             is_relevant=True,
             summary=response1,
             issue_body=response3,
