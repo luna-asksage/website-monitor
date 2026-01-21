@@ -3,7 +3,7 @@
 > Auto-generated from open GitHub issues with `type:watchlist` label.
 > Manage via GitHub issues. Do not edit manually.
 >
-> Last updated: 2026-01-20T01:28:29.140819+00:00
+> Last updated: 2026-01-21T01:41:39.561042+00:00
 
 ---
 
@@ -12,4 +12,4 @@
 - **Watch for:** Gemini 3 series models leaving Public Preview and become Generally Available (GA).
 - **Why:** Preview models are only available in the global region. We are restricted to US regions only, so we cannot use these models until GA.
 - **Sources:** gemini
-- **Expires:** 2026-07-13 (173 days remaining)
+- **Expires:** 2026-07-13 (172 days remaining)
