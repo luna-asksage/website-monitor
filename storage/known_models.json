@@ -104,6 +104,7 @@
       "gemini-api-model-font",
       "gemini-api-model-table",
       "gemini-api-model-table-grid",
+      "gemini-api-new",
       "gemini-api-not-supported",
       "gemini-api-recommended",
       "gemini-api-supported",
@@ -111,5 +112,5 @@
       "gemini-flash-latest"
     ]
   },
-  "updated": "2026-01-20T18:34:14.954293+00:00"
+  "updated": "2026-01-26T01:47:09.973284+00:00"
 }
