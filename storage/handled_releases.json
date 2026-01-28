@@ -13,7 +13,14 @@
       "link": "https://ai.google.dev/gemini-api/docs/changelog",
       "issue_number": 31,
       "detected_at": "2026-01-24T06:29:49.528429+00:00"
+    },
+    {
+      "id": "393f1541d2117eed",
+      "title": "Introducing Prism",
+      "link": "https://openai.com/index/introducing-prism",
+      "issue_number": 32,
+      "detected_at": "2026-01-28T01:41:33.033161+00:00"
     }
   ],
-  "updated": "2026-01-27T18:37:05.848301+00:00"
+  "updated": "2026-01-28T01:41:33.033535+00:00"
 }
