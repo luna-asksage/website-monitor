@@ -13,7 +13,28 @@
       "link": "https://ai.google.dev/gemini-api/docs/changelog",
       "issue_number": 33,
       "detected_at": "2026-02-03T12:56:17.575243+00:00"
+    },
+    {
+      "id": "18816edf464a073a",
+      "title": "Announcements Sep 29, 2025 Introducing Claude Sonnet 4.5 Claude Sonnet 4.5 sets new benchmark records in coding, reasoning, and computer use while being Anthropic's most aligned model, accompanied by ",
+      "link": "https://www.anthropic.com/news/claude-sonnet-4-5",
+      "issue_number": 34,
+      "detected_at": "2026-02-04T12:56:09.203655+00:00"
+    },
+    {
+      "id": "57f01cae307e1cb1",
+      "title": "Announcements Nov 24, 2025 Introducing Claude Opus 4.5 The best model in the world for coding, agents, and computer use, with meaningful improvements to everyday tasks like slides and spreadsheets. Cl",
+      "link": "https://www.anthropic.com/news/claude-opus-4-5",
+      "issue_number": 35,
+      "detected_at": "2026-02-04T12:56:09.650045+00:00"
+    },
+    {
+      "id": "e99bd76836c10fea",
+      "title": "Product Oct 15, 2025 Introducing Claude Haiku 4.5 Claude Haiku 4.5 matches state-of-the-art coding capabilities from months ago while delivering unprecedented speed and cost-efficiency for complex tas",
+      "link": "https://www.anthropic.com/news/claude-haiku-4-5",
+      "issue_number": 36,
+      "detected_at": "2026-02-04T12:56:10.048806+00:00"
     }
   ],
-  "updated": "2026-02-04T06:49:04.741642+00:00"
+  "updated": "2026-02-04T12:56:10.049215+00:00"
 }
