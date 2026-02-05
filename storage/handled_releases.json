@@ -34,7 +34,28 @@
       "link": "https://www.anthropic.com/news/claude-haiku-4-5",
       "issue_number": 36,
       "detected_at": "2026-02-04T12:56:10.048806+00:00"
+    },
+    {
+      "id": "6c20810f6d90adf9",
+      "title": "Introducing Claude Opus 4.6 Announcements Feb 5, 2026 We\u2019re upgrading our smartest model. Across agentic coding, computer use, tool use, search, and finance, Opus 4.6 is an industry-leading model, oft",
+      "link": "https://www.anthropic.com/news/claude-opus-4-6",
+      "issue_number": 37,
+      "detected_at": "2026-02-05T18:44:58.278901+00:00"
+    },
+    {
+      "id": "f0fce4f78503498f",
+      "title": "GPT-5.3-Codex System Card",
+      "link": "https://openai.com/index/gpt-5-3-codex-system-card",
+      "issue_number": 38,
+      "detected_at": "2026-02-05T18:44:58.917876+00:00"
+    },
+    {
+      "id": "4958fa2ff58b6fcc",
+      "title": "Introducing GPT-5.3-Codex",
+      "link": "https://openai.com/index/introducing-gpt-5-3-codex",
+      "issue_number": 39,
+      "detected_at": "2026-02-05T18:44:59.460633+00:00"
     }
   ],
-  "updated": "2026-02-05T12:58:18.127519+00:00"
+  "updated": "2026-02-05T18:44:59.461059+00:00"
 }

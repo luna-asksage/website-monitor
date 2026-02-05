@@ -10,6 +10,7 @@
       "claude-3-haiku-20240307-v1",
       "claude-4",
       "claude-4-5",
+      "claude-4-6",
       "claude-4-best-practices",
       "claude-code-analytics-api",
       "claude-docs.png",
@@ -30,6 +31,9 @@
       "claude-opus-4-5",
       "claude-opus-4-5-20251101",
       "claude-opus-4-5-20251101-v1",
+      "claude-opus-4-6",
+      "claude-opus-4-6-v1",
+      "claude-prompting-best-practices",
       "claude-sonnet-4",
       "claude-sonnet-4-0",
       "claude-sonnet-4-20250514",
@@ -112,5 +116,5 @@
       "gemini-flash-latest"
     ]
   },
-  "updated": "2026-01-26T01:47:09.973284+00:00"
+  "updated": "2026-02-05T18:44:17.646673+00:00"
 }
