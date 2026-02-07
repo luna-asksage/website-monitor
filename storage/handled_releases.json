@@ -1,13 +1,6 @@
 {
   "releases": [
     {
-      "id": "393f1541d2117eed",
-      "title": "Introducing Prism",
-      "link": "https://openai.com/index/introducing-prism",
-      "issue_number": 32,
-      "detected_at": "2026-01-28T01:41:33.033161+00:00"
-    },
-    {
       "id": "4bfbbe45f37a0dba",
       "title": "January 29, 2026",
       "link": "https://ai.google.dev/gemini-api/docs/changelog",
@@ -57,5 +50,5 @@
       "detected_at": "2026-02-05T18:44:59.460633+00:00"
     }
   ],
-  "updated": "2026-02-06T18:47:26.884806+00:00"
+  "updated": "2026-02-07T01:52:02.194250+00:00"
 }
