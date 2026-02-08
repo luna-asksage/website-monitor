@@ -48,7 +48,14 @@
       "link": "https://openai.com/index/introducing-gpt-5-3-codex",
       "issue_number": 39,
       "detected_at": "2026-02-05T18:44:59.460633+00:00"
+    },
+    {
+      "id": "5eb893081b000593",
+      "title": "Feb 3, 2026 Product Apple\u2019s Xcode now supports the Claude Agent SDK",
+      "link": "https://www.anthropic.com/news/apple-xcode-claude-agent-sdk",
+      "issue_number": 40,
+      "detected_at": "2026-02-08T06:46:29.482432+00:00"
     }
   ],
-  "updated": "2026-02-08T02:25:22.205439+00:00"
+  "updated": "2026-02-08T06:46:29.482878+00:00"
 }
