@@ -19,6 +19,7 @@
       "claude-haiku-4-5-20251001-v1",
       "claude-in-character",
       "claude-in-microsoft-foundry",
+      "claude-is-a-space-to-think",
       "claude-on-amazon-bedrock",
       "claude-on-vertex-ai",
       "claude-opus-4",
@@ -116,5 +117,5 @@
       "gemini-flash-latest"
     ]
   },
-  "updated": "2026-02-05T18:44:17.646673+00:00"
+  "updated": "2026-02-10T05:50:22.880791+00:00"
 }
