@@ -27,7 +27,14 @@
       "link": "https://www.anthropic.com/news/apple-xcode-claude-agent-sdk",
       "issue_number": 40,
       "detected_at": "2026-02-08T06:46:29.482432+00:00"
+    },
+    {
+      "id": "18816edf464a073a",
+      "title": "Announcements Sep 29, 2025 Introducing Claude Sonnet 4.5 Claude Sonnet 4.5 sets new benchmark records in coding, reasoning, and computer use while being Anthropic's most aligned model, accompanied by ",
+      "link": "https://www.anthropic.com/news/claude-sonnet-4-5",
+      "issue_number": 41,
+      "detected_at": "2026-02-15T02:04:47.224057+00:00"
     }
   ],
-  "updated": "2026-02-14T18:32:35.278359+00:00"
+  "updated": "2026-02-15T02:04:47.224530+00:00"
 }
