@@ -41,7 +41,8 @@
       "claude-sonnet-4-20250514-v1",
       "claude-sonnet-4-5",
       "claude-sonnet-4-5-20250929",
-      "claude-sonnet-4-5-20250929-v1"
+      "claude-sonnet-4-5-20250929-v1",
+      "claude-sonnet-4-6"
     ],
     "openai": [
       "gpt-5",
@@ -117,5 +118,5 @@
       "gemini-flash-latest"
     ]
   },
-  "updated": "2026-02-10T05:50:22.880791+00:00"
+  "updated": "2026-02-17T18:55:24.662896+00:00"
 }
