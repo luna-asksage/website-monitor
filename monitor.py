@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-AI-Powered Website Change Monitor
-Creates GitHub Issues when product/API changes are detected.
+AI Model Availability Monitor v2
+Deterministic model detection via doc-page scraping + diff.
+LLM used only for enrichment, never for classification.
+Creates GitHub Issues when new models or platform availability changes are detected.
 """
 
+import argparse
 import os
 import json
-import hashlib
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, asdict
-from urllib.parse import urljoin
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass, field, asdict
 import requests
 from bs4 import BeautifulSoup
 
@@ -31,39 +32,76 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Constants
+# =============================================================================
+
+SCHEMA_VERSION = 2
+
+US_REGIONS = [
+    "us-central1", "us-east1", "us-east4", "us-east5",
+    "us-south1", "us-west1", "us-west4",
+]
+
+# =============================================================================
 # Data Classes
 # =============================================================================
 
 @dataclass
-class ContentItem:
-    """A single news/changelog item."""
-    id: str
-    title: str
-    description: str
-    date: str
-    link: str
-    source_name: str
-    full_content: Optional[str] = None
-    
-    def to_dict(self) -> dict:
-        return asdict(self)
+class PlatformStatus:
+    """Availability status for a model on a specific platform."""
+    available: bool
+    first_seen: Optional[str] = None
+    regions: Optional[List[str]] = None
 
-
-@dataclass 
-class HandledRelease:
-    """A release we've already created an issue for."""
-    id: str
-    title: str
-    link: str
-    issue_number: int
-    detected_at: str
-    
     def to_dict(self) -> dict:
-        return asdict(self)
-    
+        d = {"available": self.available, "first_seen": self.first_seen}
+        if self.regions is not None:
+            d["regions"] = self.regions
+        return d
+
     @classmethod
-    def from_dict(cls, data: dict) -> 'HandledRelease':
-        return cls(**data)
+    def from_dict(cls, data: dict) -> 'PlatformStatus':
+        return cls(
+            available=data.get("available", False),
+            first_seen=data.get("first_seen"),
+            regions=data.get("regions"),
+        )
+
+
+@dataclass
+class KnownModel:
+    """A model tracked across platforms."""
+    first_seen: str
+    platforms: Dict[str, PlatformStatus] = field(default_factory=dict)
+    issue_number: Optional[int] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "first_seen": self.first_seen,
+            "platforms": {k: v.to_dict() for k, v in self.platforms.items()},
+            "issue_number": self.issue_number,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'KnownModel':
+        platforms = {}
+        for k, v in data.get("platforms", {}).items():
+            platforms[k] = PlatformStatus.from_dict(v)
+        return cls(
+            first_seen=data["first_seen"],
+            platforms=platforms,
+            issue_number=data.get("issue_number"),
+        )
+
+
+@dataclass
+class ModelDelta:
+    """A detected change: new model or new platform availability."""
+    provider: str
+    model_id: str
+    is_new_model: bool
+    new_platforms: List[str]
+    all_platforms: Dict[str, PlatformStatus]
 
 
 @dataclass
@@ -76,31 +114,18 @@ class WatchlistItem:
     sources: List[str]
     created_at: str
     expires_at: str
-    
+
     def to_dict(self) -> dict:
         return asdict(self)
-
-
-@dataclass
-class AnalysisResult:
-    """Result of analyzing a content item."""
-    item: ContentItem
-    is_relevant: bool
-    summary: str
-    issue_body: str
-    resolves_watchlist: Optional[int] = None
 
 
 # =============================================================================
 # Required Labels
 # =============================================================================
-# Note: We use labels with "type:" prefix for categorization (e.g., "type:release").
-# This is a naming convention, NOT GitHub's "issue types" feature which requires
-# organization-level configuration and GitHub Projects. Labels work universally
-# across all repository types and don't require special permissions.
 
 REQUIRED_LABELS = [
-    {"name": "type:release", "color": "0E8A16", "description": "AI release/update detected"},
+    {"name": "type:release", "color": "0E8A16", "description": "AI model release/availability detected"},
+    {"name": "type:platform-update", "color": "0075CA", "description": "Existing model available on new platform"},
     {"name": "type:watchlist", "color": "1D76DB", "description": "Watching for future availability"},
     {"name": "type:bug", "color": "D73A4A", "description": "System error"},
     {"name": "openai", "color": "412991", "description": "OpenAI source"},
@@ -112,28 +137,173 @@ REQUIRED_LABELS = [
 
 
 # =============================================================================
-# LLM Client
+# Platform Registry
+# =============================================================================
+
+PLATFORMS = {
+    "anthropic": {
+        "direct_api": {
+            "name": "Anthropic API",
+            "url": "https://docs.anthropic.com/en/docs/about-claude/models",
+            "parser": "parse_anthropic_docs",
+        },
+        "gcp_vertex": {
+            "name": "GCP Vertex AI",
+            "url": "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude",
+            "parser": "parse_gcp_vertex_claude",
+        },
+        "aws_bedrock": {
+            "name": "AWS Bedrock",
+            "url": "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
+            "parser": "parse_aws_bedrock_anthropic",
+        },
+        "aws_govcloud": {
+            "name": "AWS GovCloud",
+            "url": "https://docs.aws.amazon.com/govcloud-us/latest/UserGuide/govcloud-bedrock.html",
+            "parser": "parse_aws_govcloud_anthropic",
+        },
+    },
+    "openai": {
+        "direct_api": {
+            "name": "OpenAI API",
+            "url": "https://platform.openai.com/docs/models",
+            "parser": "parse_openai_docs",
+        },
+        "azure": {
+            "name": "Azure OpenAI",
+            "url": "https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models",
+            "parser": "parse_azure_openai",
+        },
+        "azure_gov": {
+            "name": "Azure Government",
+            "url": "https://raw.githubusercontent.com/MicrosoftDocs/azure-ai-docs/main/articles/ai-foundry/openai/azure-government.md",
+            "parser": "parse_azure_gov_openai",
+        },
+    },
+    "google": {
+        "direct_api": {
+            "name": "Google AI Studio",
+            "url": "https://ai.google.dev/gemini-api/docs/models",
+            "parser": "parse_gemini_docs",
+        },
+        "vertex_us": {
+            "name": "Vertex AI (US)",
+            "url": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations",
+            "parser": "parse_vertex_us_gemini",
+        },
+    },
+}
+
+
+# =============================================================================
+# Model ID Normalization
+# =============================================================================
+
+# Date suffix pattern: strip YYYYMMDD, YYYY-MM-DD, or MM-YYYY suffixes
+DATE_SUFFIX_RE = re.compile(
+    r'[-_](?:'
+    r'2[0-9]{3}[01][0-9][0-3][0-9]'      # YYYYMMDD
+    r'|2[0-9]{3}-[01][0-9]-[0-3][0-9]'    # YYYY-MM-DD
+    r'|[01][0-9]-2[0-9]{3}'               # MM-YYYY
+    r')(?:[-_]v\d+(?::\d+)?)?$'
+)
+
+# Bedrock model ID patterns
+BEDROCK_PREFIX_RE = re.compile(r'^(?:anthropic|amazon|meta|cohere|stability|ai21|mistral)\.')
+BEDROCK_SUFFIX_RE = re.compile(r'[-_]v\d+(?::\d+)?$')
+
+# Version dash normalization: "3-5" -> "3.5" when followed by a dash (part of compound ID)
+# Matches: claude-3-5-sonnet, gemini-2-5-flash, but NOT claude-3-haiku
+VERSION_DASH_RE = re.compile(r'(\d+)-(\d+)(?=-)')
+
+# Junk patterns: strings that look like model IDs but aren't
+JUNK_PATTERNS_RAW = [
+    # Anthropic non-model strings (page content, links, image filenames)
+    r'claude-(?:docs|in-|on-|is-|prompting|code-analytics|best-practice|models|for-|with-|and-)',
+    r'claude-.*\.(?:png|jpg|svg|gif|webp|pdf)$',
+    # Gemini CSS classes, UI components, page artifacts (NOT real model IDs)
+    r'gemini-api(?:-|$)',                    # gemini-api, gemini-api-card, etc.
+    r'gemini-card',                          # gemini-card-centered, etc.
+    r'gemini-centered',                      # CSS layout classes
+    r'gemini-icon',                          # icon components
+    r'gemini-model-(?:desc|details|grid|name|row|font|table|button)',  # CSS classes
+    r'gemini-.*\.(?:png|jpg|svg|gif|webp|pdf|svg)$',  # image files
+    r'gemini-.*(?:deprecated|_\d+$)',        # deprecated markers, underscore suffixes
+    r'gemini-flash-latest$',                 # generic alias, not a real model
+    # OpenAI trailing punctuation
+    r'gpt-\d+[a-z]*\.$',
+    # Too generic / too short
+    r'^(?:claude|gemini|gpt)-?$',
+]
+JUNK_PATTERNS = [re.compile(p) for p in JUNK_PATTERNS_RAW]
+
+
+def _is_junk_model_id(model_id: str) -> bool:
+    """Return True if the model ID is a false positive from regex scraping."""
+    for pattern in JUNK_PATTERNS:
+        if pattern.search(model_id):
+            return True
+    return False
+
+
+def normalize_model_id(raw_id: str, provider: str = "") -> str:
+    """
+    Normalize a model ID to version level.
+    Strips date suffixes, provider prefixes, normalizes version dashes to dots.
+    """
+    model_id = raw_id.strip().lower()
+
+    # Strip Bedrock-style provider prefix
+    model_id = BEDROCK_PREFIX_RE.sub('', model_id)
+
+    # Strip date suffixes
+    model_id = DATE_SUFFIX_RE.sub('', model_id)
+
+    # Strip Bedrock version suffixes like -v1:0
+    model_id = BEDROCK_SUFFIX_RE.sub('', model_id)
+
+    # Normalize version dashes to dots: claude-3-5-sonnet -> claude-3.5-sonnet
+    model_id = VERSION_DASH_RE.sub(r'\1.\2', model_id)
+
+    # Strip trailing dots/dashes
+    model_id = model_id.rstrip('.-')
+
+    return model_id
+
+
+def _normalize_and_filter(raw_ids: Set[str], provider: str,
+                           min_len: int = 7) -> Set[str]:
+    """Normalize model IDs, filter junk, deduplicate."""
+    normalized = set()
+    for raw_id in raw_ids:
+        if _is_junk_model_id(raw_id):
+            continue
+        nid = normalize_model_id(raw_id, provider)
+        if _is_junk_model_id(nid):
+            continue
+        if len(nid) >= min_len and not nid.endswith('-'):
+            normalized.add(nid)
+    return normalized
+
+
+# =============================================================================
+# LLM Client (Enrichment Only)
 # =============================================================================
 
 class LLMClient:
-    """Handles all LLM API interactions."""
-    
+    """Handles LLM API interactions for enrichment (never classification)."""
+
     def __init__(self, config: dict):
         self.api_url = config.get('url', '')
         self.api_token = config.get('token', '')
         self.model = config.get('model', 'google-gemini-2.5-pro')
         self.temperature = config.get('temperature', 0.1)
-    
+
     def query(self, prompt: str) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Send a prompt to the LLM.
-        
-        Returns:
-            Tuple of (response_text, error_message)
-        """
+        """Send a prompt to the LLM. Returns (response_text, error_message)."""
         if not self.api_token:
             return None, "No API token configured"
-        
+
         try:
             files = {
                 'model': (None, self.model),
@@ -143,7 +313,7 @@ class LLMClient:
                 'dataset': (None, 'none'),
                 'usage': (None, 'True')
             }
-            
+
             response = requests.post(
                 self.api_url,
                 headers={'x-access-tokens': self.api_token},
@@ -151,34 +321,28 @@ class LLMClient:
                 timeout=90
             )
             response.raise_for_status()
-            
             result = response.json()
-            
-            # Extract from 'message' field (contains actual LLM response)
+
             response_text = None
             if isinstance(result, dict):
                 response_text = result.get('message')
-                
                 if not response_text or not response_text.strip():
                     response_text = result.get('text')
-                
                 if not response_text or not response_text.strip():
                     resp_field = result.get('response', '')
                     if resp_field and resp_field.upper() not in ['OK', 'SUCCESS', 'ERROR']:
                         response_text = resp_field
-                        
             elif isinstance(result, str):
                 response_text = result
             else:
                 response_text = str(result)
-            
+
             response_text = response_text.strip() if response_text else ""
-            
             if not response_text:
                 return None, "Empty response from API"
-            
+
             return response_text, None
-            
+
         except requests.exceptions.Timeout:
             return None, "Request timed out"
         except requests.exceptions.RequestException as e:
@@ -188,92 +352,268 @@ class LLMClient:
 
 
 # =============================================================================
+# Platform Parsers
+# =============================================================================
+
+class PlatformParsers:
+    """Extract model IDs from provider documentation pages."""
+
+    def __init__(self, session: requests.Session):
+        self.session = session
+
+    def _fetch(self, url: str, timeout: int = 30) -> Optional[str]:
+        """Fetch a URL and return its HTML content."""
+        try:
+            resp = self.session.get(url, timeout=timeout)
+            if resp.ok:
+                return resp.text
+            logger.warning(f"Fetch failed for {url}: HTTP {resp.status_code}")
+            return None
+        except requests.exceptions.Timeout:
+            logger.warning(f"Fetch timed out for {url}")
+            return None
+        except Exception as e:
+            logger.warning(f"Fetch error for {url}: {e}")
+            return None
+
+    # ---- Anthropic ----
+
+    def _extract_claude_ids(self, html: str) -> Set[str]:
+        """Extract and normalize Claude model IDs from HTML."""
+        text = html.lower()
+        bedrock_ids = set(re.findall(r'anthropic\.claude-[\w\d.-]+(?::[\d]+)?', text))
+        plain_ids = set(re.findall(r'claude-[\w\d][\w\d.-]*', text))
+        return _normalize_and_filter(bedrock_ids | plain_ids, "anthropic")
+
+    def parse_anthropic_docs(self, url: str) -> Set[str]:
+        html = self._fetch(url)
+        return self._extract_claude_ids(html) if html else set()
+
+    def parse_gcp_vertex_claude(self, url: str) -> Set[str]:
+        html = self._fetch(url)
+        return self._extract_claude_ids(html) if html else set()
+
+    def parse_aws_bedrock_anthropic(self, url: str) -> Set[str]:
+        html = self._fetch(url)
+        return self._extract_claude_ids(html) if html else set()
+
+    def parse_aws_govcloud_anthropic(self, url: str) -> Set[str]:
+        html = self._fetch(url)
+        return self._extract_claude_ids(html) if html else set()
+
+    # ---- OpenAI ----
+
+    def _extract_openai_ids(self, text: str) -> Set[str]:
+        """Extract and normalize OpenAI model IDs from text."""
+        text_lower = text.lower()
+        patterns = [
+            r'gpt-[\w\d][\w\d.-]*',
+            r'o[1-9]-[\w-]+',
+            r'(?<![/\w])o[1-9](?![\w])',
+        ]
+        raw_ids = set()
+        for pattern in patterns:
+            raw_ids.update(re.findall(pattern, text_lower))
+        return _normalize_and_filter(raw_ids, "openai", min_len=2)
+
+    def parse_openai_docs(self, url: str) -> Set[str]:
+        html = self._fetch(url)
+        return self._extract_openai_ids(html) if html else set()
+
+    def parse_azure_openai(self, url: str) -> Set[str]:
+        """Extract OpenAI model IDs available on Azure OpenAI Service."""
+        html = self._fetch(url)
+        if not html:
+            return set()
+
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # Prefer models found in tables (more precise than full-page scan)
+        tables = soup.find_all('table')
+        table_models = set()
+        for table in tables:
+            table_text = table.get_text()
+            table_models.update(self._extract_openai_ids(table_text))
+
+        if table_models:
+            return table_models
+
+        # Fallback: full page
+        return self._extract_openai_ids(soup.get_text())
+
+    def parse_azure_gov_openai(self, url: str) -> Set[str]:
+        """Extract OpenAI model IDs from Azure Government docs (raw markdown)."""
+        content = self._fetch(url)
+        if not content:
+            return set()
+
+        gov_models = set()
+
+        # Parse markdown tables: look for rows with ✅ indicating availability
+        # Table format: | Region | model1 | model2 | ... |
+        # Row format:   | usgovarizona | ✅ | - | ✅ | ... |
+        lines = content.split('\n')
+        header_line = None
+        header_models = []
+
+        for i, line in enumerate(lines):
+            line = line.strip()
+            if not line.startswith('|'):
+                header_line = None
+                header_models = []
+                continue
+
+            cells = [c.strip() for c in line.split('|')]
+            # Remove empty first/last cells from leading/trailing pipes
+            cells = [c for c in cells if c or c == '']
+
+            # Skip separator rows
+            if all(set(c) <= {'-', ':', ' '} for c in cells if c):
+                continue
+
+            # Detect header row: contains model names like gpt-4.1, o3-mini, etc.
+            if any(re.search(r'gpt-|o[1-9]', c.lower()) for c in cells):
+                # Check if first cell looks like a region header (Region, empty, etc.)
+                first = cells[0].lower() if cells else ''
+                if 'region' in first or first.startswith('**') or not re.search(r'gpt-|o[1-9]', first):
+                    header_models = []
+                    for cell in cells[1:]:
+                        # Extract model name: "**gpt-4.1**, **2025-04-14**" -> "gpt-4.1"
+                        model_matches = re.findall(r'(gpt-[\w\d][\w\d.-]*|o[1-9][\w-]*)', cell.lower())
+                        header_models.append(model_matches[0] if model_matches else None)
+                    header_line = i
+                    continue
+
+            # Data row: check for ✅ availability markers
+            if header_line is not None and header_models:
+                for j, cell in enumerate(cells[1:]):
+                    if '✅' in cell and j < len(header_models) and header_models[j]:
+                        gov_models.add(header_models[j])
+
+        return _normalize_and_filter(gov_models, "openai", min_len=2)
+
+    # ---- Google/Gemini ----
+
+    def _extract_gemini_ids(self, text: str) -> Set[str]:
+        """Extract and normalize Gemini model IDs from text."""
+        raw_ids = set(re.findall(r'gemini-[\w\d][\w\d.-]*', text.lower()))
+        return _normalize_and_filter(raw_ids, "google")
+
+    def parse_gemini_docs(self, url: str) -> Set[str]:
+        html = self._fetch(url)
+        return self._extract_gemini_ids(html) if html else set()
+
+    def parse_vertex_us_gemini(self, url: str) -> Set[str]:
+        """Extract Gemini models available in US regions on Vertex AI."""
+        html = self._fetch(url)
+        if not html:
+            return set()
+
+        soup = BeautifulSoup(html, 'html.parser')
+        us_models = set()
+
+        # Look for tables mapping models to regions
+        for table in soup.find_all('table'):
+            headers = [th.get_text().strip().lower() for th in table.find_all('th')]
+
+            us_col_indices = []
+            for i, h in enumerate(headers):
+                if any(region in h for region in US_REGIONS):
+                    us_col_indices.append(i)
+
+            if not us_col_indices:
+                continue
+
+            for row in table.find_all('tr'):
+                cells = row.find_all(['td', 'th'])
+                if not cells:
+                    continue
+
+                model_text = cells[0].get_text().lower()
+                gemini_ids = re.findall(r'gemini-[\w\d][\w\d.-]*', model_text)
+                if not gemini_ids:
+                    continue
+
+                has_us = False
+                for col_idx in us_col_indices:
+                    if col_idx < len(cells):
+                        cell_text = cells[col_idx].get_text().strip().lower()
+                        if cell_text and cell_text not in ['-', 'no', 'n/a', '', '—']:
+                            has_us = True
+                            break
+
+                if has_us:
+                    for raw_id in gemini_ids:
+                        nid = normalize_model_id(raw_id, "google")
+                        if not _is_junk_model_id(raw_id) and not _is_junk_model_id(nid):
+                            if len(nid) > 7:
+                                us_models.add(nid)
+
+        # Fallback: prose extraction if table parsing failed
+        if not us_models:
+            text = soup.get_text().lower()
+            if any(r in text for r in US_REGIONS):
+                us_models = self._extract_gemini_ids(text)
+                if us_models:
+                    logger.warning(
+                        f"Vertex US parser fell back to prose extraction — "
+                        f"found {len(us_models)} models. Review page structure."
+                    )
+
+        return us_models
+
+
+# =============================================================================
 # Website Monitor
 # =============================================================================
 
 class WebsiteMonitor:
-    """Monitors websites for AI product releases."""
-    
-    def __init__(self, config_path: str = "config.json"):
+    """Monitors AI provider documentation for new model availability."""
+
+    def __init__(self, config_path: str = "config.json",
+                 dry_run: bool = False, seed: bool = False):
         self.config = self._load_config(config_path)
         self._override_with_env_vars()
-        
+
         self.storage_dir = Path(self.config.get("storage_dir", "storage"))
         self.storage_dir.mkdir(exist_ok=True)
-        
+
         self.llm = LLMClient(self.config.get('asksage_api', {}))
-        
+
         self.github_token = os.getenv('GITHUB_TOKEN')
         self.github_repo = os.getenv('GITHUB_REPOSITORY')
-        
+
+        self.dry_run = dry_run
+        self.seed = seed
         self.errors: List[str] = []
-        
-        # Limits: 7 days OR 10 items, whichever comes first
-        self.time_window_days = 7
-        self.max_items_per_source = 10
-        
-        # Parallelization settings
-        self.max_fetch_workers = 5
-        self.max_llm_workers = 3
-        
-        # Token budget settings
-        self.chars_per_token = 3  # Conservative estimate
-        self.response_buffer_tokens = 10_000
-        self.max_combined_context = 160_000
-        
-        # Cache for known models
-        self._known_models_cache: Optional[Dict[str, List[str]]] = None
-        
-        # Cache for context files
-        self._watchlist_content: Optional[str] = None
-        self._mistakes_content: Optional[str] = None
-        
-        # Browser-like session
+
+        self.fetch_delay_seconds = 1.5
+
+        detection = self.config.get("detection", {})
+        self.news_enrichment = detection.get("news_enrichment", True)
+        self.active_platforms = detection.get("platforms", {
+            "anthropic": ["direct_api", "gcp_vertex", "aws_bedrock"],
+            "openai": ["azure", "azure_gov"],
+            "google": ["direct_api", "vertex_us"],
+        })
+
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': (
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
         })
-        
-        # Model documentation URLs
-        self.model_docs = {
-            "anthropic": "https://docs.anthropic.com/en/docs/about-claude/models",
-            "openai": "https://platform.openai.com/docs/models",
-            "google": "https://ai.google.dev/gemini-api/docs/models"
-        }
-        
-        self.websites = {
-            "openai": {
-                "url": "https://openai.com/news/rss.xml",
-                "name": "OpenAI",
-                "type": "rss",
-                "emoji": "🔵",
-                "label": "openai",
-                "base_url": "https://openai.com"
-            },
-            "anthropic": {
-                "url": "https://www.anthropic.com/news",
-                "name": "Anthropic",
-                "type": "html_news",
-                "emoji": "🟠", 
-                "label": "anthropic",
-                "base_url": "https://www.anthropic.com"
-            },
-            "gemini": {
-                "url": "https://ai.google.dev/gemini-api/docs/changelog",
-                "name": "Google Gemini",
-                "type": "html_changelog",
-                "emoji": "🟡",
-                "label": "gemini",
-                "base_url": "https://ai.google.dev"
-            },
-        }
-    
+
+        self.parsers = PlatformParsers(self.session)
+
     # =========================================================================
     # Configuration
     # =========================================================================
-    
+
     def _load_config(self, config_path: str) -> Dict:
         default_config = {
             "asksage_api": {
@@ -282,9 +622,17 @@ class WebsiteMonitor:
                 "model": "google-claude-45-opus",
                 "temperature": 0.1
             },
-            "storage_dir": "storage"
+            "storage_dir": "storage",
+            "detection": {
+                "news_enrichment": True,
+                "platforms": {
+                    "anthropic": ["direct_api", "gcp_vertex", "aws_bedrock"],
+                    "openai": ["azure", "azure_gov"],
+                    "google": ["direct_api", "vertex_us"],
+                }
+            },
         }
-        
+
         try:
             with open(config_path, 'r') as f:
                 loaded = json.load(f)
@@ -304,73 +652,31 @@ class WebsiteMonitor:
         except Exception as e:
             logger.warning(f"Config load error: {e}, using defaults")
             return default_config
-    
+
     def _override_with_env_vars(self):
         if os.getenv('ASKSAGE_API_TOKEN'):
             self.config['asksage_api']['token'] = os.getenv('ASKSAGE_API_TOKEN')
             logger.info("Using API token from environment")
-    
+
     # =========================================================================
-    # Utilities
+    # GitHub API
     # =========================================================================
-    
-    def _generate_id(self, *args) -> str:
-        combined = '|'.join(str(a).strip() for a in args if a)
-        return hashlib.sha256(combined.encode()).hexdigest()[:16]
-    
-    def _parse_date(self, date_str: str) -> Optional[datetime]:
-        if not date_str:
-            return None
-        try:
-            from dateutil import parser
-            dt = parser.parse(date_str, fuzzy=True)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
-        except Exception:
-            return None
-    
-    def _is_recent(self, date: Optional[datetime]) -> bool:
-        if not date:
-            return True
-        cutoff = datetime.now(timezone.utc) - timedelta(days=self.time_window_days)
-        return date >= cutoff
-    
-    def _get_provider_key(self, source_name: str) -> str:
-        """Map source name to provider key for model lookup."""
-        name_lower = source_name.lower()
-        if 'anthropic' in name_lower or 'claude' in name_lower:
-            return 'anthropic'
-        elif 'openai' in name_lower:
-            return 'openai'
-        elif 'google' in name_lower or 'gemini' in name_lower:
-            return 'google'
-        return ''
-    
+
     def _github_api(self, method: str, endpoint: str, **kwargs) -> Optional[requests.Response]:
-        """
-        Make a GitHub API request.
-        
-        Args:
-            method: HTTP method (GET, POST, PATCH, etc.)
-            endpoint: API endpoint (e.g., '/issues')
-            **kwargs: Additional arguments passed to requests.request()
-        
-        Returns:
-            Response object on success, None on failure.
-            Failures are logged with details but not added to self.errors
-            (callers decide if the error is workflow-critical).
-        """
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would {method} {endpoint}")
+            return None
+
         if not self.github_token or not self.github_repo:
             logger.debug(f"GitHub API call skipped ({method} {endpoint}): not configured")
             return None
-        
+
         url = f"https://api.github.com/repos/{self.github_repo}{endpoint}"
         headers = {
             'Authorization': f'token {self.github_token}',
             'Accept': 'application/vnd.github.v3+json'
         }
-        
+
         try:
             resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
             resp.raise_for_status()
@@ -381,275 +687,495 @@ class WebsiteMonitor:
         except requests.exceptions.HTTPError as e:
             status_code = e.response.status_code if e.response is not None else 'unknown'
             logger.error(f"GitHub API HTTP {status_code} ({method} {endpoint}): {e}")
-            if status_code == 403:
-                logger.warning("GitHub API 403: possible rate limit or insufficient permissions")
-            elif status_code == 404:
-                logger.warning(f"GitHub API 404: endpoint or resource not found: {endpoint}")
-            elif status_code == 422:
-                # Unprocessable entity - often means validation error
-                try:
-                    error_body = e.response.json()
-                    logger.error(f"GitHub API validation error: {error_body}")
-                except Exception:
-                    pass
-            return None
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"GitHub API connection error ({method} {endpoint}): {e}")
             return None
         except requests.exceptions.RequestException as e:
             logger.error(f"GitHub API request failed ({method} {endpoint}): {e}")
             return None
-    
-    # =========================================================================
-    # Label Management
-    # =========================================================================
-    
+
     def _ensure_labels_exist(self):
-        """Create required labels if they don't exist."""
-        if not self.github_token or not self.github_repo:
+        if self.dry_run or not self.github_token or not self.github_repo:
             return
-        
+
         resp = self._github_api('GET', '/labels', params={'per_page': 100})
         if not resp:
-            logger.warning("Could not fetch existing labels, skipping label creation")
             return
-        
+
         existing = {label['name'].lower() for label in resp.json()}
-        
         for label in REQUIRED_LABELS:
             if label['name'].lower() not in existing:
                 result = self._github_api('POST', '/labels', json=label)
                 if result:
                     logger.info(f"Created label: {label['name']}")
-                else:
-                    logger.warning(f"Failed to create label: {label['name']}")
-    
-    # =========================================================================
-    # Known Models
-    # =========================================================================
-        
-    def _load_cached_models(self) -> Dict[str, List[str]]:
-        """Load cached models from storage."""
-        cache_path = self.storage_dir / "known_models.json"
-        try:
-            if cache_path.exists():
-                with open(cache_path) as f:
-                    data = json.load(f)
-                    return data.get('models', {})
-        except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON in cached models file: {e}")
-        except Exception as e:
-            logger.warning(f"Could not load cached models: {e}")
-        return {}
 
-    def _save_cached_models(self, models: Dict[str, List[str]]):
-        """Save models to cache."""
-        cache_path = self.storage_dir / "known_models.json"
-        try:
-            with open(cache_path, 'w') as f:
-                json.dump({
-                    'models': models,
-                    'updated': datetime.now(timezone.utc).isoformat()
-                }, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Could not save cached models: {e}")
+    # =========================================================================
+    # Known Models Store (Schema v2)
+    # =========================================================================
 
-    def _fetch_known_models(self) -> Dict[str, List[str]]:
-        """
-        Fetch current model lists from each provider's documentation.
-        Uses cached models as base and merges in newly discovered models.
-        """
-        if self._known_models_cache is not None:
-            return self._known_models_cache
-        
-        # Start with cached models
-        models = self._load_cached_models()
-        if not models:
-            models = {'anthropic': [], 'openai': [], 'google': []}
-        
-        models_updated = False
-        
-        # Anthropic models
+    def _models_path(self) -> Path:
+        return self.storage_dir / "known_models.json"
+
+    def _load_known_models(self) -> Dict[str, Dict[str, KnownModel]]:
+        """Load known models. Handles v1 → v2 migration."""
+        path = self._models_path()
+        if not path.exists():
+            return {"anthropic": {}, "openai": {}, "google": {}}
+
         try:
-            resp = self.session.get(self.model_docs['anthropic'], timeout=20)
-            if resp.ok:
-                text = resp.text.lower()
-                anthropic_pattern = r'claude-[\w\d.-]+'
-                found = set(re.findall(anthropic_pattern, text))
-                new_models = found - set(models.get('anthropic', []))
-                if new_models:
-                    models['anthropic'] = sorted(set(models.get('anthropic', [])) | found)
-                    models_updated = True
-                    logger.info(f"Found {len(new_models)} new Anthropic models")
-                logger.info(f"Anthropic: {len(models['anthropic'])} models total")
-            else:
-                logger.warning(f"Anthropic models fetch failed: HTTP {resp.status_code}")
-        except requests.exceptions.Timeout:
-            logger.warning("Anthropic models fetch timed out")
-        except Exception as e:
-            logger.warning(f"Failed to fetch Anthropic models: {e}")
-        
-        # OpenAI models
-        try:
-            resp = self.session.get(self.model_docs['openai'], timeout=20)
-            if resp.ok:
-                text = resp.text.lower()
-                openai_patterns = [
-                    r'gpt-[\w\d.-]+',
-                    r'o[1-9]-[\w-]+',
-                    r'o[1-9](?!\w)',
-                    r'davinci-[\w\d-]+',
-                    r'codex-[\w\d-]+',
-                ]
-                found = set()
-                for pattern in openai_patterns:
-                    found.update(re.findall(pattern, text))
-                new_models = found - set(models.get('openai', []))
-                if new_models:
-                    models['openai'] = sorted(set(models.get('openai', [])) | found)
-                    models_updated = True
-                    logger.info(f"Found {len(new_models)} new OpenAI models")
-                logger.info(f"OpenAI: {len(models['openai'])} models total")
-            else:
-                logger.warning(f"OpenAI models fetch failed: HTTP {resp.status_code}")
-        except requests.exceptions.Timeout:
-            logger.warning("OpenAI models fetch timed out")
-        except Exception as e:
-            logger.warning(f"Failed to fetch OpenAI models: {e}")
-        
-        # Google Gemini models
-        try:
-            resp = self.session.get(self.model_docs['google'], timeout=20)
-            if resp.ok:
-                text = resp.text.lower()
-                gemini_pattern = r'gemini-[\w\d.-]+'
-                found = set(re.findall(gemini_pattern, text))
-                new_models = found - set(models.get('google', []))
-                if new_models:
-                    models['google'] = sorted(set(models.get('google', [])) | found)
-                    models_updated = True
-                    logger.info(f"Found {len(new_models)} new Google models")
-                logger.info(f"Google: {len(models['google'])} models total")
-            else:
-                logger.warning(f"Google models fetch failed: HTTP {resp.status_code}")
-        except requests.exceptions.Timeout:
-            logger.warning("Google models fetch timed out")
-        except Exception as e:
-            logger.warning(f"Failed to fetch Google models: {e}")
-        
-        # Apply fallbacks only if we have NO models for a provider
-        if not models.get('anthropic'):
-            models['anthropic'] = [
-                'claude-4.5-opus', 'claude-4.5-sonnet', 'claude-4.5-haiku',
-                'claude-4-opus', 'claude-4-sonnet',
-                'claude-3.5-opus', 'claude-3.5-sonnet', 'claude-3.5-haiku',
-                'claude-3-opus', 'claude-3-sonnet', 'claude-3-haiku'
-            ]
-            logger.info("Using fallback Anthropic model list")
-            models_updated = True
-        
-        if not models.get('openai'):
-            models['openai'] = [
-                'gpt-5', 'gpt-5-turbo', 'gpt-4.5', 'gpt-4.5-turbo',
-                'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-4',
-                'o1', 'o1-preview', 'o1-mini', 'o3', 'o3-mini',
-                'gpt-3.5-turbo'
-            ]
-            logger.info("Using fallback OpenAI model list")
-            models_updated = True
-        
-        if not models.get('google'):
-            models['google'] = [
-                'gemini-3-pro', 'gemini-3-flash',
-                'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite',
-                'gemini-2.0-flash', 'gemini-2.0-flash-lite',
-                'gemini-1.5-pro', 'gemini-1.5-flash'
-            ]
-            logger.info("Using fallback Google model list")
-            models_updated = True
-        
-        # Save if updated
-        if models_updated:
-            self._save_cached_models(models)
-        
-        self._known_models_cache = models
+            with open(path) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, Exception) as e:
+            logger.warning(f"Could not load known models: {e}")
+            return {"anthropic": {}, "openai": {}, "google": {}}
+
+        schema_version = data.get("schema_version", 1)
+
+        if schema_version >= 2:
+            models = {}
+            for provider, provider_models in data.get("models", {}).items():
+                models[provider] = {}
+                for model_id, model_data in provider_models.items():
+                    models[provider][model_id] = KnownModel.from_dict(model_data)
+            return models
+
+        # Schema v1 migration: flat lists → platform-aware objects
+        logger.info("Migrating known_models.json from schema v1 to v2")
+        now = datetime.now(timezone.utc).isoformat()
+        models = {}
+        for provider, model_list in data.get("models", {}).items():
+            models[provider] = {}
+            if isinstance(model_list, list):
+                for raw_id in model_list:
+                    nid = normalize_model_id(raw_id, provider)
+                    if nid not in models[provider]:
+                        models[provider][nid] = KnownModel(
+                            first_seen=now,
+                            platforms={"direct_api": PlatformStatus(available=True, first_seen=now)},
+                        )
+
+        for p in ["anthropic", "openai", "google"]:
+            if p not in models:
+                models[p] = {}
+
+        self._save_known_models(models)
         return models
-    
+
+    def _save_known_models(self, models: Dict[str, Dict[str, KnownModel]]):
+        data = {
+            "schema_version": SCHEMA_VERSION,
+            "models": {},
+            "updated": datetime.now(timezone.utc).isoformat(),
+        }
+        for provider, provider_models in models.items():
+            data["models"][provider] = {
+                model_id: model.to_dict()
+                for model_id, model in provider_models.items()
+            }
+
+        try:
+            with open(self._models_path(), 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Could not save known models: {e}")
+
     # =========================================================================
-    # Watchlist Management
+    # Phase 1: Deterministic Model Scraping + Diff
     # =========================================================================
-    
-    def _fetch_open_watchlist_issues(self) -> List[dict]:
-        """Fetch all open issues with type:watchlist label."""
+
+    def _scrape_all_platforms(self) -> Dict[str, Dict[str, Set[str]]]:
+        """Scrape all configured platform doc pages. Returns {provider: {platform: set(model_ids)}}."""
+        results: Dict[str, Dict[str, Set[str]]] = {}
+
+        for provider, platforms in PLATFORMS.items():
+            results[provider] = {}
+            active = self.active_platforms.get(provider, [])
+
+            for platform_key, platform_info in platforms.items():
+                if platform_key not in active:
+                    continue
+
+                parser_name = platform_info["parser"]
+                parser_fn = getattr(self.parsers, parser_name, None)
+
+                if not parser_fn:
+                    logger.error(f"Parser not found: {parser_name}")
+                    results[provider][platform_key] = set()
+                    continue
+
+                logger.info(f"Scraping {provider}/{platform_key}: {platform_info['url']}")
+                try:
+                    found = parser_fn(platform_info["url"])
+                    results[provider][platform_key] = found
+                    preview = sorted(found)[:5]
+                    logger.info(f"  Found {len(found)} models: {preview}{'...' if len(found) > 5 else ''}")
+                except Exception as e:
+                    logger.error(f"  Parser error: {e}")
+                    results[provider][platform_key] = set()
+
+                time.sleep(self.fetch_delay_seconds)
+
+        return results
+
+    def _validate_scrape_results(
+        self,
+        scraped: Dict[str, Dict[str, Set[str]]],
+        known: Dict[str, Dict[str, KnownModel]]
+    ) -> Dict[str, Dict[str, Set[str]]]:
+        """Validate scrape results. Use cache if a platform drops to 0 unexpectedly."""
+        validated = {}
+
+        for provider, platforms in scraped.items():
+            validated[provider] = {}
+            for platform_key, found_models in platforms.items():
+                cached_count = sum(
+                    1 for m in known.get(provider, {}).values()
+                    if platform_key in m.platforms and m.platforms[platform_key].available
+                )
+
+                if cached_count > 0 and len(found_models) == 0:
+                    logger.error(
+                        f"{provider}/{platform_key}: Found 0 models but cache has {cached_count}. "
+                        f"Possible page structure change. Using cached data."
+                    )
+                    cached_models = set()
+                    for model_id, model in known.get(provider, {}).items():
+                        if platform_key in model.platforms and model.platforms[platform_key].available:
+                            cached_models.add(model_id)
+                    validated[provider][platform_key] = cached_models
+                elif cached_count > 0 and len(found_models) < cached_count * 0.5:
+                    logger.warning(
+                        f"{provider}/{platform_key}: Found {len(found_models)} models but cache "
+                        f"has {cached_count}. Significant drop — review parser."
+                    )
+                    validated[provider][platform_key] = found_models
+                else:
+                    validated[provider][platform_key] = found_models
+
+        return validated
+
+    def _compute_deltas(
+        self,
+        scraped: Dict[str, Dict[str, Set[str]]],
+        known: Dict[str, Dict[str, KnownModel]]
+    ) -> List[ModelDelta]:
+        """Compare scraped models against known to find new models or new platform availability."""
+        deltas = []
+        now = datetime.now(timezone.utc).isoformat()
+
+        for provider, platforms in scraped.items():
+            all_found: Dict[str, Dict[str, PlatformStatus]] = {}
+
+            for platform_key, model_ids in platforms.items():
+                for model_id in model_ids:
+                    if model_id not in all_found:
+                        all_found[model_id] = {}
+                    all_found[model_id][platform_key] = PlatformStatus(
+                        available=True, first_seen=now,
+                    )
+
+            provider_known = known.get(provider, {})
+
+            for model_id, found_platforms in all_found.items():
+                if model_id not in provider_known:
+                    deltas.append(ModelDelta(
+                        provider=provider,
+                        model_id=model_id,
+                        is_new_model=True,
+                        new_platforms=list(found_platforms.keys()),
+                        all_platforms=found_platforms,
+                    ))
+                else:
+                    existing = provider_known[model_id]
+                    new_platforms = []
+                    for plat_key in found_platforms:
+                        if plat_key not in existing.platforms or not existing.platforms[plat_key].available:
+                            new_platforms.append(plat_key)
+
+                    if new_platforms:
+                        merged = {}
+                        for k, v in existing.platforms.items():
+                            merged[k] = v
+                        for k, v in found_platforms.items():
+                            if k not in merged or not merged[k].available:
+                                merged[k] = v
+                        deltas.append(ModelDelta(
+                            provider=provider,
+                            model_id=model_id,
+                            is_new_model=False,
+                            new_platforms=new_platforms,
+                            all_platforms=merged,
+                        ))
+
+        return deltas
+
+    def _apply_deltas(self, deltas: List[ModelDelta],
+                       known: Dict[str, Dict[str, KnownModel]]):
+        """Apply deltas to the known models store (in-memory)."""
+        now = datetime.now(timezone.utc).isoformat()
+        for delta in deltas:
+            provider_known = known.setdefault(delta.provider, {})
+            if delta.is_new_model:
+                provider_known[delta.model_id] = KnownModel(
+                    first_seen=now,
+                    platforms={
+                        k: PlatformStatus(available=True, first_seen=now)
+                        for k in delta.new_platforms
+                    },
+                )
+            else:
+                existing = provider_known[delta.model_id]
+                for plat_key in delta.new_platforms:
+                    existing.platforms[plat_key] = PlatformStatus(
+                        available=True, first_seen=now,
+                    )
+
+    # =========================================================================
+    # Phase 2: LLM Enrichment
+    # =========================================================================
+
+    def _enrich_delta(self, delta: ModelDelta) -> str:
+        """Use LLM to generate a description. Never asks "is this new?"."""
+        if not self.news_enrichment:
+            return ""
+
+        prompt = f"""<task>
+Describe the AI model "{delta.model_id}" from {delta.provider}.
+</task>
+
+<instructions>
+Provide a brief (3-5 sentence) factual description of this model's capabilities,
+intended use cases, and any notable features. If you are not familiar with this
+specific model, say so and provide what you can infer from the naming convention.
+
+Do NOT speculate about release dates, availability, or pricing.
+Do NOT say whether this model is "new" — that determination has already been made.
+Focus only on capabilities and technical characteristics.
+</instructions>"""
+
+        response, error = self.llm.query(prompt)
+        if error:
+            logger.warning(f"LLM enrichment failed for {delta.model_id}: {error}")
+            return ""
+
+        return response.strip() if response else ""
+
+    # =========================================================================
+    # Phase 3: Issue Management
+    # =========================================================================
+
+    def _format_availability_matrix(self, provider: str,
+                                     platforms: Dict[str, PlatformStatus]) -> str:
+        provider_platforms = PLATFORMS.get(provider, {})
+        active = self.active_platforms.get(provider, [])
+
+        lines = [
+            "| Platform | Available | Since |",
+            "|----------|-----------|-------|",
+        ]
+
+        for plat_key in active:
+            plat_info = provider_platforms.get(plat_key, {})
+            plat_name = plat_info.get("name", plat_key)
+
+            if plat_key in platforms and platforms[plat_key].available:
+                since = platforms[plat_key].first_seen[:10] if platforms[plat_key].first_seen else "—"
+                lines.append(f"| {plat_name} | ✅ | {since} |")
+            else:
+                lines.append(f"| {plat_name} | ❌ | — |")
+
+        return "\n".join(lines)
+
+    def _provider_emoji(self, provider: str) -> str:
+        return {"anthropic": "🟠", "openai": "🔵", "google": "🟡"}.get(provider, "⚪")
+
+    def _provider_display_name(self, provider: str) -> str:
+        return {"anthropic": "Anthropic", "openai": "OpenAI", "google": "Google"}.get(provider, provider)
+
+    def _create_new_model_issue(self, delta: ModelDelta, enrichment: str) -> Optional[int]:
+        emoji = self._provider_emoji(delta.provider)
+        provider_name = self._provider_display_name(delta.provider)
+
+        title = f"{emoji} New {provider_name} Model: {delta.model_id}"
+        matrix = self._format_availability_matrix(delta.provider, delta.all_platforms)
+
+        body = f"""## {emoji} New {provider_name} Model: {delta.model_id}
+
+**Provider:** {provider_name}
+**First Detected:** {datetime.now(timezone.utc).strftime('%Y-%m-%d')}
+**Type:** API Model
+
+### Availability Matrix
+
+{matrix}
+"""
+
+        if enrichment:
+            body += f"\n### Details\n\n{enrichment}\n"
+
+        body += "\n### Source Links\n"
+        for plat_key in delta.new_platforms:
+            plat_info = PLATFORMS.get(delta.provider, {}).get(plat_key, {})
+            if plat_info:
+                body += f"- [{plat_info['name']}]({plat_info['url']})\n"
+
+        body += "\n---\n*Detected by AI Model Availability Monitor v2*\n"
+        labels = ["type:release", delta.provider, "auto-close-7d"]
+
+        if self.dry_run:
+            logger.info(f"[DRY RUN] Would create issue: {title}")
+            logger.info(f"[DRY RUN] Labels: {labels}")
+            return None
+
+        resp = self._github_api('POST', '/issues', json={
+            'title': title, 'body': body, 'labels': labels,
+        })
+
+        if resp:
+            issue_number = resp.json()['number']
+            logger.info(f"Created issue #{issue_number}: {title}")
+            return issue_number
+
+        self.errors.append(f"Failed to create issue for {delta.model_id}")
+        return None
+
+    def _update_existing_issue(self, delta: ModelDelta,
+                                known_model: KnownModel) -> bool:
+        if not known_model.issue_number:
+            logger.warning(f"No issue number for {delta.model_id} — cannot post update")
+            return False
+
+        new_plat_names = []
+        for plat_key in delta.new_platforms:
+            plat_info = PLATFORMS.get(delta.provider, {}).get(plat_key, {})
+            new_plat_names.append(plat_info.get("name", plat_key))
+
+        matrix = self._format_availability_matrix(delta.provider, delta.all_platforms)
+
+        body = f"""## 🆕 Platform Update
+
+**{delta.model_id}** is now available on **{', '.join(new_plat_names)}**!
+
+### Updated Availability Matrix
+
+{matrix}
+
+---
+*Detected by AI Model Availability Monitor v2*
+"""
+
+        if self.dry_run:
+            logger.info(
+                f"[DRY RUN] Would comment on issue #{known_model.issue_number}: "
+                f"{delta.model_id} → {', '.join(new_plat_names)}"
+            )
+            return True
+
+        resp = self._github_api(
+            'POST', f'/issues/{known_model.issue_number}/comments',
+            json={'body': body}
+        )
+
+        if resp:
+            logger.info(f"Updated issue #{known_model.issue_number}: {delta.model_id} → {', '.join(new_plat_names)}")
+            return True
+        return False
+
+    def _close_old_issues(self):
+        if self.dry_run:
+            return
+
         resp = self._github_api('GET', '/issues', params={
-            'labels': 'type:watchlist',
-            'state': 'open',
-            'per_page': 100
+            'labels': 'auto-close-7d', 'state': 'open', 'per_page': 100
         })
         if not resp:
+            return
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        for issue in resp.json():
+            created = issue.get('created_at', '')
+            try:
+                created_dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                if created_dt < cutoff:
+                    self._github_api('PATCH', f"/issues/{issue['number']}", json={'state': 'closed'})
+                    logger.info(f"Auto-closed issue #{issue['number']}: {issue['title'][:50]}")
+            except Exception:
+                pass
+
+    def _create_error_issue(self):
+        if self.dry_run or not self.errors:
+            return
+
+        title = f"🐛 Monitor errors: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}"
+        body = "## Errors during monitoring run\n\n"
+        for err in self.errors:
+            body += f"- {err}\n"
+        body += "\n---\n*Auto-generated by AI Model Availability Monitor v2*"
+
+        self._github_api('POST', '/issues', json={
+            'title': title, 'body': body, 'labels': ['type:bug'],
+        })
+
+    # =========================================================================
+    # Watchlist Management (preserved from v1)
+    # =========================================================================
+
+    def _fetch_open_watchlist_issues(self) -> List[dict]:
+        if self.dry_run:
             return []
-        return resp.json()
-    
+        resp = self._github_api('GET', '/issues', params={
+            'labels': 'type:watchlist', 'state': 'open', 'per_page': 100
+        })
+        return resp.json() if resp else []
+
     def _parse_watchlist_issue(self, issue: dict) -> Optional[WatchlistItem]:
-        """Parse a watchlist issue into a WatchlistItem."""
         body = issue.get('body', '')
         if not body:
             return None
-        
+
         watch_for = ""
         why = ""
         sources = []
         expires_days = 180
-        
-        # Extract "What to watch for" section
+
         watch_match = re.search(
             r'(?:What to watch for|### What to watch for)\s*\n+(.+?)(?=\n\s*(?:###|Why|$))',
             body, re.IGNORECASE | re.DOTALL
         )
         if watch_match:
             watch_for = watch_match.group(1).strip()
-        
-        # Extract "Why it matters" section
+
         why_match = re.search(
             r'(?:Why it matters|### Why it matters)\s*\n+(.+?)(?=\n\s*(?:###|Sources|$))',
             body, re.IGNORECASE | re.DOTALL
         )
         if why_match:
             why = why_match.group(1).strip()
-        
-        # Extract sources
+
         if 'all sources' in body.lower():
             sources = ['openai', 'anthropic', 'gemini']
         else:
-            if 'openai' in body.lower():
-                sources.append('openai')
-            if 'anthropic' in body.lower():
-                sources.append('anthropic')
-            if 'gemini' in body.lower():
-                sources.append('gemini')
-        
+            for s in ['openai', 'anthropic', 'gemini']:
+                if s in body.lower():
+                    sources.append(s)
         if not sources:
             sources = ['openai', 'anthropic', 'gemini']
-        
-        # Extract expiration
+
         expires_match = re.search(r'Expires.*?(\d+)', body, re.IGNORECASE)
         if expires_match:
             try:
                 expires_days = int(expires_match.group(1))
             except ValueError:
                 pass
-        
+
         created_at = issue.get('created_at', datetime.now(timezone.utc).isoformat())
         try:
             created_dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-            expires_dt = created_dt + timedelta(days=expires_days)
-            expires_at = expires_dt.isoformat()
+            expires_at = (created_dt + timedelta(days=expires_days)).isoformat()
         except Exception:
             expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_days)).isoformat()
-        
+
         if not watch_for:
             watch_for = issue.get('title', 'Unknown')
-        
+
         return WatchlistItem(
             issue_number=issue['number'],
             title=issue.get('title', 'Unknown'),
@@ -657,23 +1183,18 @@ class WebsiteMonitor:
             why=why,
             sources=sources,
             created_at=created_at,
-            expires_at=expires_at
+            expires_at=expires_at,
         )
-    
+
     def _generate_watchlist_md(self, items: List[WatchlistItem]) -> str:
-        """Generate watchlist.md content from watchlist items."""
         now = datetime.now(timezone.utc)
-        
         lines = [
-            "# Watchlist",
-            "",
+            "# Watchlist", "",
             "> Auto-generated from open GitHub issues with `type:watchlist` label.",
-            "> Manage via GitHub issues. Do not edit manually.",
-            ">",
-            f"> Last updated: {now.isoformat()}",
-            "",
+            "> Manage via GitHub issues. Do not edit manually.", ">",
+            f"> Last updated: {now.isoformat()}", "",
         ]
-        
+
         if not items:
             lines.append("*No active watchlist items.*")
         else:
@@ -684,10 +1205,9 @@ class WebsiteMonitor:
                     expires_str = f"{expires_dt.strftime('%Y-%m-%d')} ({days_remaining} days remaining)"
                 except Exception:
                     expires_str = item.expires_at
-                
+
                 lines.extend([
-                    "---",
-                    "",
+                    "---", "",
                     f"## {item.title}",
                     f"- **Issue:** #{item.issue_number}",
                     f"- **Watch for:** {item.watch_for}",
@@ -696,1382 +1216,272 @@ class WebsiteMonitor:
                     lines.append(f"- **Why:** {item.why}")
                 lines.extend([
                     f"- **Sources:** {', '.join(item.sources)}",
-                    f"- **Expires:** {expires_str}",
-                    "",
+                    f"- **Expires:** {expires_str}", "",
                 ])
-        
+
         return '\n'.join(lines)
-    
+
     def _close_expired_watchlist(self, items: List[WatchlistItem]):
-        """Close watchlist items that have expired."""
         now = datetime.now(timezone.utc)
-        
         for item in items:
             try:
                 expires_dt = datetime.fromisoformat(item.expires_at.replace('Z', '+00:00'))
                 if now > expires_dt:
                     self._github_api('POST', f'/issues/{item.issue_number}/comments', json={
-                        'body': f"⏰ This watchlist item has expired after reaching its expiration date ({expires_dt.strftime('%Y-%m-%d')}).\n\nReopening this issue will reset the expiration timer."
+                        'body': (
+                            f"⏰ This watchlist item has expired "
+                            f"({expires_dt.strftime('%Y-%m-%d')}).\n\n"
+                            f"Reopening this issue will reset the expiration timer."
+                        )
                     })
-                    self._github_api('PATCH', f'/issues/{item.issue_number}', json={
-                        'state': 'closed'
-                    })
-                    logger.info(f"Closed expired watchlist item #{item.issue_number}")
+                    self._github_api('PATCH', f'/issues/{item.issue_number}', json={'state': 'closed'})
+                    logger.info(f"Closed expired watchlist #{item.issue_number}")
             except Exception as e:
-                logger.warning(f"Failed to check/close watchlist item #{item.issue_number}: {e}")
-    
+                logger.warning(f"Watchlist expiry check failed #{item.issue_number}: {e}")
+
     def _resolve_watchlist_item(self, watchlist_issue_number: int, release_issue_number: int):
-        """Mark a watchlist item as resolved."""
         self._github_api('POST', f'/issues/{watchlist_issue_number}/comments', json={
-            'body': f"✅ **Resolved!**\n\nThis watchlist item has been resolved by release issue #{release_issue_number}."
+            'body': f"✅ **Resolved!** See release issue #{release_issue_number}."
         })
-        
-        self._github_api('PATCH', f'/issues/{watchlist_issue_number}', json={
-            'state': 'closed'
-        })
-        
-        logger.info(f"Resolved watchlist item #{watchlist_issue_number} via #{release_issue_number}")
-    
+        self._github_api('PATCH', f'/issues/{watchlist_issue_number}', json={'state': 'closed'})
+        logger.info(f"Resolved watchlist #{watchlist_issue_number} via #{release_issue_number}")
+
+    def _check_watchlist_resolution(self, delta: ModelDelta,
+                                     watchlist_items: List[WatchlistItem]) -> Optional[int]:
+        model_lower = delta.model_id.lower()
+        for item in watchlist_items:
+            if model_lower in item.watch_for.lower():
+                return item.issue_number
+        return None
+
     # =========================================================================
-    # Mistakes / Learning Management
+    # Mistake Tracking (preserved from v1)
     # =========================================================================
-    
-    def _fetch_unprocessed_mistakes(self) -> List[dict]:
-        """Fetch issues marked as not-relevant that haven't been processed yet."""
+
+    def _process_false_positives(self):
+        if self.dry_run:
+            return
+
         resp = self._github_api('GET', '/issues', params={
-            'labels': 'not-relevant',
-            'state': 'open',
-            'per_page': 100
+            'labels': 'not-relevant', 'state': 'open', 'per_page': 100
         })
         if not resp:
-            return []
-        
-        issues = []
+            return
+
         for issue in resp.json():
             labels = [l['name'] for l in issue.get('labels', [])]
-            if 'type:release' in labels:
-                issues.append(issue)
-        
-        return issues
-    
-    def _extract_user_feedback(self, issue: dict) -> Optional[str]:
-        """Extract the user's comment explaining why the issue is not relevant."""
-        issue_number = issue['number']
-        
-        resp = self._github_api('GET', f'/issues/{issue_number}/comments')
-        if not resp:
-            return None
-        
-        comments = resp.json()
-        
-        for comment in reversed(comments):
-            user = comment.get('user', {})
-            if user.get('type') != 'Bot' and '[bot]' not in user.get('login', ''):
-                return comment.get('body', '')
-        
-        return None
-    
-    def _generate_lesson(self, issue: dict, feedback: str) -> Optional[Tuple[str, str]]:
-        """
-        Generate a lesson from a false positive.
-        
-        Returns:
-            Tuple of (lesson_text, category) or None if generation fails
-        """
-        body = issue.get('body', '')
-        title = issue.get('title', '')
-        
-        labels = [l['name'] for l in issue.get('labels', [])]
-        source = 'Unknown'
-        for label in labels:
-            if label in ['openai', 'anthropic', 'gemini']:
-                source = label.capitalize()
-                break
-        
-        prompt = f"""<task>
-Learn from a classification mistake to prevent similar errors in the future.
-</task>
-
-<false_positive>
-<title>{title}</title>
-<source>{source}</source>
-<issue_body>
-{body[:2500]}
-</issue_body>
-</false_positive>
-
-<user_feedback>
-{feedback}
-</user_feedback>
-
-<instructions>
-Generate a concise lesson (2-4 sentences) that will prevent this type of mistake.
-
-Structure your lesson as:
-1. WHAT went wrong (the pattern that caused the error)
-2. WHAT TO DO instead (positive guidance)
-3. WHAT NOT TO DO (negative guidance)
-
-Be specific - reference the exact type of content, keywords, or patterns to watch for.
-</instructions>
-
-<categories>
-Choose the single best category:
-- hallucinated_model: LLM imagined a model that doesn't exist
-- existing_model: Treated an existing model as new
-- consumer_not_api: Confused consumer product for API announcement  
-- case_study: Flagged a customer story as a release
-- partnership: Flagged business news as technical release
-- policy_research: Flagged policy/research as technical release
-- changelog_noise: Flagged minor changelog update that wasn't significant
-- other: None of the above
-</categories>
-
-<output_format>
-LESSON: [Your 2-4 sentence lesson with specific patterns to watch for]
-CATEGORY: [single category from list above]
-</output_format>"""
-
-        response, error = self.llm.query(prompt)
-        
-        if error:
-            logger.error(f"Failed to generate lesson: {error}")
-            return None
-        
-        lesson = ""
-        category = "other"
-        
-        lesson_match = re.search(r'LESSON:\s*(.+?)(?=CATEGORY:|$)', response, re.DOTALL | re.IGNORECASE)
-        if lesson_match:
-            lesson = lesson_match.group(1).strip()
-        
-        category_match = re.search(r'CATEGORY:\s*(\w+)', response, re.IGNORECASE)
-        if category_match:
-            category = category_match.group(1).lower()
-        
-        if not lesson:
-            lesson = response.strip()
-        
-        return lesson, category
-    
-    def _append_to_mistakes_md(self, issue: dict, lesson: str, category: str):
-        """Append a lesson to mistakes.md."""
-        mistakes_path = self.storage_dir / "mistakes.md"
-        
-        existing_content = ""
-        if mistakes_path.exists():
-            existing_content = mistakes_path.read_text()
-        
-        now = datetime.now(timezone.utc)
-        
-        if not existing_content.strip():
-            existing_content = f"""# Lessons Learned
-
-> Auto-generated from issues marked `not-relevant`.
-> These lessons inform future classification decisions.
->
-> Last updated: {now.isoformat()}
-
-"""
-        
-        # Update timestamp
-        existing_content = re.sub(
-            r'Last updated:.*',
-            f'Last updated: {now.isoformat()}',
-            existing_content
-        )
-        
-        title = issue.get('title', 'Unknown')
-        issue_number = issue['number']
-        created_at = issue.get('created_at', '')[:10]
-        
-        labels = [l['name'] for l in issue.get('labels', [])]
-        source = 'Unknown'
-        for label in labels:
-            if label in ['openai', 'anthropic', 'gemini']:
-                source = label.capitalize()
-                break
-        
-        lesson_title = lesson.split('.')[0][:60] if lesson else "Lesson learned"
-        
-        new_entry = f"""
----
-
-## {lesson_title}
-- **Issue:** #{issue_number}
-- **Source:** {source}
-- **Date:** {created_at}
-- **Category:** `{category}`
-
-{lesson}
-"""
-        
-        full_content = existing_content.rstrip() + "\n" + new_entry
-        
-        mistakes_path.write_text(full_content)
-        logger.info(f"Added lesson to mistakes.md from issue #{issue_number}")
-    
-    def _process_false_positives(self):
-        """Process all unprocessed false positive issues."""
-        issues = self._fetch_unprocessed_mistakes()
-        
-        if not issues:
-            logger.info("No unprocessed false positives")
-            return
-        
-        logger.info(f"Processing {len(issues)} false positive(s)")
-        
-        for issue in issues:
-            issue_number = issue['number']
-            
-            feedback = self._extract_user_feedback(issue)
-            if not feedback:
-                self._github_api('POST', f'/issues/{issue_number}/comments', json={
-                    'body': "⚠️ Please add a comment explaining why this issue is not relevant, so I can learn from this mistake."
+            if 'processed' not in labels:
+                self._github_api('POST', f"/issues/{issue['number']}/labels", json={
+                    'labels': ['processed']
                 })
-                logger.info(f"Requested feedback on #{issue_number}")
-                continue
-            
-            result = self._generate_lesson(issue, feedback)
-            if not result:
-                self.errors.append(f"Failed to generate lesson for #{issue_number}")
-                continue
-            
-            lesson, category = result
-            
-            self._append_to_mistakes_md(issue, lesson, category)
-            
-            self._github_api('POST', f'/issues/{issue_number}/comments', json={
-                'body': f"📚 **Lesson learned!**\n\n> {lesson}\n\nThis has been added to my knowledge base to prevent similar mistakes."
-            })
-            self._github_api('PATCH', f'/issues/{issue_number}', json={
-                'state': 'closed'
-            })
-            
-            logger.info(f"Processed false positive #{issue_number}")
-    
+                self._github_api('PATCH', f"/issues/{issue['number']}", json={'state': 'closed'})
+                logger.info(f"Processed false positive #{issue['number']}: {issue['title'][:50]}")
+
     # =========================================================================
-    # Context Management
+    # Main Orchestration
     # =========================================================================
-    
-    def _load_context_files(self) -> Tuple[str, str]:
-        """Load watchlist.md and mistakes.md content."""
-        watchlist_content = ""
-        mistakes_content = ""
-        
-        watchlist_path = self.storage_dir / "watchlist.md"
-        if watchlist_path.exists():
-            watchlist_content = watchlist_path.read_text()
-        
-        mistakes_path = self.storage_dir / "mistakes.md"
-        if mistakes_path.exists():
-            mistakes_content = mistakes_path.read_text()
-        
-        return watchlist_content, mistakes_content
-    
-    def _calculate_token_budget(self, article_content: str, base_prompt: str,
-                                watchlist: str, mistakes: str) -> str:
-        """
-        Determine whether to use combined or split query strategy.
-        
-        Returns:
-            'combined' or 'split'
-        """
-        base_tokens = (len(base_prompt) + len(article_content)) // self.chars_per_token
-        base_total = base_tokens + self.response_buffer_tokens
-        
-        context_tokens = (len(watchlist) + len(mistakes)) // self.chars_per_token
-        
-        if base_total + context_tokens < self.max_combined_context:
-            return 'combined'
-        else:
-            return 'split'
-    
-    def _format_watchlist_for_prompt(self, watchlist_content: str, source: str) -> str:
-        """Format watchlist content for inclusion in prompt, filtered by source."""
-        if not watchlist_content.strip():
-            return ""
-        
-        items = []
-        current_item = None
-        
-        for line in watchlist_content.split('\n'):
-            if line.startswith('## ') and not line.startswith('## Active'):
-                if current_item:
-                    items.append(current_item)
-                current_item = {'title': line[3:].strip(), 'lines': []}
-            elif current_item and line.strip():
-                current_item['lines'].append(line)
-        
-        if current_item:
-            items.append(current_item)
-        
-        source_lower = source.lower()
-        relevant_items = []
-        for item in items:
-            item_text = '\n'.join(item['lines'])
-            if source_lower in item_text.lower() or 'all' in item_text.lower():
-                relevant_items.append(item)
-        
-        if not relevant_items:
-            return ""
-        
-        lines = ["WATCHLIST - Things we are actively watching for:"]
-        for i, item in enumerate(relevant_items, 1):
-            issue_match = re.search(r'#(\d+)', '\n'.join(item['lines']))
-            issue_num = issue_match.group(1) if issue_match else '?'
-            
-            watch_for = ""
-            why = ""
-            for line in item['lines']:
-                if 'Watch for:' in line:
-                    watch_for = line.split('Watch for:')[1].strip()
-                elif 'Why:' in line:
-                    why = line.split('Why:')[1].strip()
-            
-            lines.append(f"{i}. [Issue #{issue_num}] {item['title']}: {watch_for}")
-            if why:
-                lines.append(f"   Reason: {why}")
-        
-        lines.append("")
-        lines.append("If this article announces that a watchlist item is NOW AVAILABLE or RESOLVED,")
-        lines.append("mark it as RELEVANT and include 'RESOLVES_WATCHLIST: #<issue_number>' in your response.")
-        
-        return '\n'.join(lines)
-    
-    def _format_mistakes_for_prompt(self, mistakes_content: str) -> str:
-        """Format mistakes content for inclusion in prompt."""
-        if not mistakes_content.strip():
-            return ""
-        
-        lessons = []
-        current_lesson = None
-        
-        for line in mistakes_content.split('\n'):
-            if line.startswith('## '):
-                if current_lesson and current_lesson.get('text'):
-                    lessons.append(current_lesson)
-                current_lesson = {'title': line[3:].strip(), 'text': '', 'category': ''}
-            elif current_lesson:
-                if line.startswith('- **Category:**'):
-                    cat_match = re.search(r'`(\w+)`', line)
-                    if cat_match:
-                        current_lesson['category'] = cat_match.group(1)
-                elif not line.startswith('- **') and not line.startswith('---') and line.strip():
-                    current_lesson['text'] += ' ' + line.strip()
-        
-        if current_lesson and current_lesson.get('text'):
-            lessons.append(current_lesson)
-        
-        if not lessons:
-            return ""
-        
-        # Limit to most recent lessons to save tokens
-        lessons = lessons[-10:]
-        
-        lines = ["LESSONS FROM PAST MISTAKES - Do not repeat these errors:"]
-        for i, lesson in enumerate(lessons, 1):
-            cat = f"[{lesson['category']}]" if lesson['category'] else ""
-            lines.append(f"{i}. {cat} {lesson['text'].strip()}")
-        
-        return '\n'.join(lines)
-    
-    # =========================================================================
-    # Content Extraction
-    # =========================================================================
-    
-    def _extract_rss(self, url: str, source_name: str) -> List[ContentItem]:
-        """Extract items from RSS feed (max 10, within 7 days)."""
-        items = []
-        try:
-            resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.content, 'xml')
-            
-            for item in soup.find_all('item'):
-                # Stop if we hit max items
-                if len(items) >= self.max_items_per_source:
-                    break
-                
-                title = item.find('title')
-                title = title.get_text(strip=True) if title else ""
-                
-                link = item.find('link')
-                link = link.get_text(strip=True).rstrip(':') if link else ""
-                
-                desc = item.find('description')
-                description = ""
-                if desc:
-                    desc_soup = BeautifulSoup(desc.get_text(), 'html.parser')
-                    description = desc_soup.get_text(separator=' ', strip=True)
-                
-                date_el = item.find('pubDate')
-                date_str = date_el.get_text(strip=True) if date_el else ""
-                date = self._parse_date(date_str)
-                
-                # Skip if outside time window
-                if not self._is_recent(date):
-                    continue
-                
-                guid = item.find('guid')
-                item_id = self._generate_id(
-                    guid.get_text(strip=True) if guid else "", link, title
-                )
-                
-                items.append(ContentItem(
-                    id=item_id,
-                    title=title,
-                    description=description[:1500],
-                    date=date_str,
-                    link=link,
-                    source_name=source_name
-                ))
-            
-            logger.info(f"RSS: {len(items)} items from {source_name} (limit: {self.max_items_per_source}, window: {self.time_window_days}d)")
-            
-        except requests.exceptions.Timeout:
-            logger.error(f"RSS extraction timed out for {url}")
-            self.errors.append(f"RSS timeout ({source_name})")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"RSS extraction failed for {url}: {e}")
-            self.errors.append(f"RSS error ({source_name}): {e}")
-        except Exception as e:
-            logger.error(f"RSS parsing failed for {url}: {e}")
-            self.errors.append(f"RSS parse error ({source_name}): {e}")
-        
-        return items
-    
-    def _extract_anthropic_news(self, url: str, source_name: str, base_url: str) -> List[ContentItem]:
-        """Extract news from Anthropic's news page."""
-        items = []
-        try:
-            resp = self.session.get(url, timeout=30)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            seen_urls = set()
-            
-            for a in soup.find_all('a', href=True):
-                if len(items) >= self.max_items_per_source:
-                    break
-                
-                href = a['href']
-                
-                if not href or href in ['/', '/news', '/news/']:
-                    continue
-                if href.startswith('#') or href.startswith('mailto:'):
-                    continue
-                if '/news/' not in href:
-                    continue
-                
-                full_url = urljoin(base_url, href)
-                
-                if full_url in seen_urls:
-                    continue
-                seen_urls.add(full_url)
-                
-                title = a.get_text(separator=' ', strip=True)
-                
-                if len(title) < 10:
-                    parent = a.find_parent(['article', 'div', 'li', 'section'])
-                    if parent:
-                        heading = parent.find(['h1', 'h2', 'h3', 'h4', 'h5'])
-                        if heading:
-                            title = heading.get_text(strip=True)
-                
-                if not title or len(title) < 5:
-                    continue
-                
-                description = ""
-                date_str = ""
-                parent = a.find_parent(['article', 'div', 'li', 'section'])
-                if parent:
-                    p = parent.find('p')
-                    if p:
-                        description = p.get_text(strip=True)
-                    time_el = parent.find('time')
-                    if time_el:
-                        date_str = time_el.get('datetime', '') or time_el.get_text(strip=True)
-                
-                # Check if within time window
-                date = self._parse_date(date_str)
-                if not self._is_recent(date):
-                    continue
-                
-                items.append(ContentItem(
-                    id=self._generate_id(full_url),
-                    title=title[:200],
-                    description=description[:500],
-                    date=date_str,
-                    link=full_url,
-                    source_name=source_name
-                ))
-            
-            logger.info(f"Anthropic: {len(items)} items (limit: {self.max_items_per_source}, window: {self.time_window_days}d)")
-            
-        except requests.exceptions.Timeout:
-            logger.error(f"Anthropic extraction timed out")
-            self.errors.append(f"Anthropic timeout")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Anthropic extraction failed: {e}")
-            self.errors.append(f"Anthropic error: {e}")
-        except Exception as e:
-            logger.error(f"Anthropic parsing failed: {e}")
-            self.errors.append(f"Anthropic parse error: {e}")
-        
-        return items
-    
-    def _extract_gemini_changelog(self, url: str, source_name: str) -> List[ContentItem]:
-        """Extract changelog entries from Gemini docs."""
-        items = []
-        try:
-            resp = self.session.get(url, timeout=30)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            date_pattern = re.compile(
-                r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}',
-                re.IGNORECASE
-            )
-            
-            for heading in soup.find_all(['h2', 'h3']):
-                if len(items) >= self.max_items_per_source:
-                    break
-                
-                text = heading.get_text(strip=True)
-                
-                if not date_pattern.search(text):
-                    continue
-                
-                date = self._parse_date(text)
-                if not self._is_recent(date):
-                    continue
-                
-                content_parts = []
-                sibling = heading.find_next_sibling()
-                while sibling and sibling.name not in ['h2', 'h3']:
-                    t = sibling.get_text(strip=True)
-                    if t:
-                        content_parts.append(t)
-                    sibling = sibling.find_next_sibling()
-                
-                content = ' '.join(content_parts)
-                
-                items.append(ContentItem(
-                    id=self._generate_id(text, content[:200]),
-                    title=text,
-                    description=content[:1500],
-                    date=text,
-                    link=url,
-                    source_name=source_name
-                ))
-            
-            logger.info(f"Gemini: {len(items)} items (limit: {self.max_items_per_source}, window: {self.time_window_days}d)")
-            
-        except requests.exceptions.Timeout:
-            logger.error(f"Gemini extraction timed out")
-            self.errors.append(f"Gemini timeout")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Gemini extraction failed: {e}")
-            self.errors.append(f"Gemini error: {e}")
-        except Exception as e:
-            logger.error(f"Gemini parsing failed: {e}")
-            self.errors.append(f"Gemini parse error: {e}")
-        
-        return items
-    
-    def _fetch_article_content(self, url: str, base_url: str) -> Optional[str]:
-        """Try to fetch full article content."""
-        if not url or not url.startswith('http'):
-            return None
-        
-        try:
-            headers = dict(self.session.headers)
-            headers['Referer'] = base_url
-            
-            resp = self.session.get(url, headers=headers, timeout=15)
-            if resp.status_code == 403:
-                return None
-            
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
-                tag.decompose()
-            
-            main = soup.find('main') or soup.find('article') or soup.body
-            if main:
-                return main.get_text(separator='\n', strip=True)[:8000]
-            
-        except Exception:
-            pass
-        
-        return None
-    
-    def _fetch_articles_parallel(self, items: List[ContentItem], base_url: str) -> List[ContentItem]:
-        """Fetch article content for multiple items in parallel."""
-        if not items:
-            return items
-        
-        def fetch_one(item: ContentItem) -> ContentItem:
-            if item.link:
-                item.full_content = self._fetch_article_content(item.link, base_url)
-            return item
-        
-        logger.info(f"Fetching {len(items)} articles in parallel (max {self.max_fetch_workers} workers)...")
-        
-        with ThreadPoolExecutor(max_workers=self.max_fetch_workers) as executor:
-            results = list(executor.map(fetch_one, items))
-        
-        fetched_count = sum(1 for item in results if item.full_content)
-        logger.info(f"Fetched content for {fetched_count}/{len(items)} articles")
-        
-        return results
-    
-    # =========================================================================
-    # Handled Releases
-    # =========================================================================
-    
-    def _load_handled(self) -> List[HandledRelease]:
-        db = self.storage_dir / "handled_releases.json"
-        try:
-            if db.exists():
-                with open(db) as f:
-                    data = json.load(f)
-                    return [HandledRelease.from_dict(r) for r in data.get('releases', [])]
-        except json.JSONDecodeError as e:
-            logger.warning(f"Invalid JSON in handled releases: {e}")
-        except Exception as e:
-            logger.warning(f"Could not load handled releases: {e}")
-        return []
-    
-    def _save_handled(self, releases: List[HandledRelease]):
-        db = self.storage_dir / "handled_releases.json"
-        try:
-            # Keep only last 10 days
-            cutoff = datetime.now(timezone.utc) - timedelta(days=10)
-            recent = []
-            for r in releases:
-                try:
-                    dt = datetime.fromisoformat(r.detected_at.replace('Z', '+00:00'))
-                    if dt >= cutoff:
-                        recent.append(r)
-                except Exception:
-                    recent.append(r)
-            
-            with open(db, 'w') as f:
-                json.dump({
-                    'releases': [r.to_dict() for r in recent],
-                    'updated': datetime.now(timezone.utc).isoformat()
-                }, f, indent=2)
-        except Exception as e:
-            logger.error(f"Could not save handled releases: {e}")
-    
-    def _is_handled(self, item: ContentItem, handled: List[HandledRelease]) -> bool:
-        for h in handled:
-            if h.id == item.id or (h.link and item.link and h.link == item.link):
-                return True
-        return False
-    
-    # =========================================================================
-    # LLM Analysis
-    # =========================================================================
-    
-    def _analyze_item(self, item: ContentItem, 
-                      watchlist_items: List[WatchlistItem]) -> AnalysisResult:
-        """Analyze a single item to determine if it's a relevant release."""
-        
-        # Build article content block
-        article_content = f"""<article>
-<title>{item.title}</title>
-<source>{item.source_name}</source>
-<date>{item.date or 'Unknown'}</date>
-<link>{item.link}</link>
-<description>{item.description or ''}</description>
-"""
-        if item.full_content:
-            article_content += f"<full_content>\n{item.full_content[:6000]}\n</full_content>\n"
-        article_content += "</article>"
-        
-        # Query 1: Summarize
-        prompt1 = f"""<task>
-Summarize what this article is announcing or discussing. Be factual and specific.
-</task>
 
-{article_content}
-
-<instructions>
-In 2-3 sentences, state:
-1. What type of content this is (announcement, case study, blog post, changelog, policy update, etc.)
-2. The main topic or news
-3. Any specific product names, model names, or version numbers mentioned
-
-Be precise. Do not infer or assume - only state what is explicitly in the article.
-</instructions>"""
-
-        response1, error1 = self.llm.query(prompt1)
-        
-        if error1:
-            logger.error(f"Query 1 failed for {item.title[:40]}: {error1}")
-            return AnalysisResult(item=item, is_relevant=False, summary="", issue_body="")
-        
-        logger.info(f"Summary: {response1[:100]}...")
-        
-        # Get known models for context
-        known_models = self._fetch_known_models()
-        provider_key = self._get_provider_key(item.source_name)
-        provider_models = known_models.get(provider_key, [])
-        
-        # Build models context
-        models_list = ', '.join(provider_models[:40]) if provider_models else 'Unable to fetch - use fallback judgment'
-        
-        # Format watchlist and mistakes for prompt
-        watchlist_context = self._format_watchlist_for_prompt(
-            self._watchlist_content or "", 
-            item.source_name
-        )
-        mistakes_context = self._format_mistakes_for_prompt(
-            self._mistakes_content or ""
-        )
-        
-        # Check token budget
-        base_prompt_size = len(response1) + len(models_list) + 2000  # estimate
-        strategy = self._calculate_token_budget(
-            article_content, str(base_prompt_size), watchlist_context, mistakes_context
-        )
-        
-        # Build extra context based on strategy
-        extra_context = ""
-        if strategy == 'combined':
-            if watchlist_context:
-                extra_context += f"\n{watchlist_context}\n"
-            if mistakes_context:
-                extra_context += f"\n{mistakes_context}\n"
-        
-        # Query 2: Classification with strict exclusion logic
-        prompt2 = f"""<role>
-You are a strict classifier for an API developer notification system.
-Your job is to filter OUT irrelevant content. When uncertain, reject.
-False positives waste developer time. False negatives can be caught next cycle.
-</role>
-
-<article_summary>
-Title: {item.title}
-Source: {item.source_name}
-Summary: {response1}
-</article_summary>
-
-<critical_exclusions>
-IMMEDIATELY REJECT if ANY of these apply:
-
-1. CASE STUDY: Article title contains "How [Company]...", "[Company]'s lessons...", 
-   "Building with...", or describes a customer's experience using AI
-   → These describe existing capabilities, NOT new releases
-
-2. PARTNERSHIP/BUSINESS: Announces partnerships, investments, data centers, 
-   hiring, acquisitions, or corporate news
-   → Not relevant to API developers
-
-3. CONSUMER PRODUCT: About ChatGPT, Claude App, Gemini App, AI Studio, 
-   or subscription tiers (Plus, Pro, Team, Enterprise plans for consumers)
-   → We only care about API/developer platform changes
-
-4. POLICY/RESEARCH: Safety policies, research papers, responsible AI, 
-   governance frameworks, or thought leadership
-   → Not actionable for developers
-
-5. VERTICAL SOLUTIONS: Healthcare solutions, enterprise offerings, 
-   industry-specific products WITHOUT new underlying API capabilities
-   → Marketing, not technical releases
-
-6. EXISTING MODELS IN NEW CONTEXT: Article mentions existing models 
-   being used in a new way, new region, or new integration
-   → Model must be genuinely NEW, not existing model in new context
-</critical_exclusions>
-
-<known_models>
-Models that ALREADY EXIST for {item.source_name}:
-{models_list}
-
-IMPORTANT: If an article MENTIONS a model not in this list, that does NOT 
-automatically mean it's a new release. Case studies and blog posts often 
-contain typos or refer to internal model versions. Only flag as new if 
-the article is an OFFICIAL ANNOUNCEMENT of a new model release.
-</known_models>
-{extra_context}
-<relevant_criteria>
-ONLY mark as RELEVANT if the article is an OFFICIAL ANNOUNCEMENT containing:
-
-- New model release: A genuinely new model announced by {item.source_name} 
-  (not mentioned in a case study or customer story)
-- New API capability: New endpoints, parameters, features, or rate limits
-- Pricing changes: Changes to API pricing (not subscription tiers)
-- SDK/library release: New developer tools or SDK versions
-- Deprecation notice: Models or API features being deprecated
-- Breaking changes: Changes requiring developer action
-- Availability changes: Models moving from preview to GA (especially in new regions)
-</relevant_criteria>
-
-<output_format>
-Think step by step:
-
-EXCLUSION_CHECK: [Check each exclusion 1-6. Does any apply? State which one or "None"]
-ARTICLE_TYPE: [case_study | announcement | changelog | blog_post | policy | other]
-RELEVANT: [YES or NO]
-REASON: [One specific sentence explaining your decision]
-RESOLVES_WATCHLIST: #[issue_number] (only if applicable, otherwise omit this line)
-</output_format>"""
-
-        response2, error2 = self.llm.query(prompt2)
-        
-        if error2:
-            logger.error(f"Query 2 failed for {item.title[:40]}: {error2}")
-            return AnalysisResult(item=item, is_relevant=False, summary=response1, issue_body="")
-        
-        # Handle split strategy - additional queries for watchlist and mistakes
-        if strategy == 'split':
-            if watchlist_context:
-                watchlist_prompt = f"""<context>
-Article: {item.title}
-Source: {item.source_name}
-Summary: {response1}
-</context>
-
-{watchlist_context}
-
-<task>
-Does this article resolve any watchlist item?
-</task>
-
-<output>
-RESOLVES_WATCHLIST: #[issue_number] or NONE
-</output>"""
-                
-                wl_response, wl_error = self.llm.query(watchlist_prompt)
-                if not wl_error and wl_response:
-                    response2 += "\n" + wl_response
-            
-            if mistakes_context:
-                mistakes_prompt = f"""<context>
-Article: {item.title}
-Source: {item.source_name}  
-Summary: {response1}
-Classification so far: {response2[:500]}
-</context>
-
-{mistakes_context}
-
-<task>
-Would marking this article as RELEVANT repeat any past mistake listed above?
-</task>
-
-<output>
-REPEAT_MISTAKE: YES or NO
-WHICH_MISTAKE: [If yes, which one]
-</output>"""
-                
-                m_response, m_error = self.llm.query(mistakes_prompt)
-                if not m_error and m_response and 'YES' in m_response.upper():
-                    logger.info(f"Rejected by mistakes check: {item.title[:40]}")
-                    return AnalysisResult(
-                        item=item, 
-                        is_relevant=False, 
-                        summary=response1, 
-                        issue_body=""
-                    )
-        
-        # Parse response with improved flexibility
-        is_relevant = False
-        reason = response2
-        resolves_watchlist = None
-        article_type = "unknown"
-        
-        # Check for exclusion applied
-        exclusion_match = re.search(r'EXCLUSION_CHECK:\s*(.+?)(?=\n|ARTICLE_TYPE)', response2, re.IGNORECASE | re.DOTALL)
-        if exclusion_match:
-            exclusion_text = exclusion_match.group(1).strip().lower()
-            # If any exclusion was found (not "none"), reject
-            if exclusion_text and 'none' not in exclusion_text and len(exclusion_text) > 5:
-                logger.info(f"Excluded by rule: {item.title[:40]}... - {exclusion_text[:50]}")
-                return AnalysisResult(
-                    item=item,
-                    is_relevant=False,
-                    summary=response1,
-                    issue_body=""
-                )
-        
-        # Extract article type
-        type_match = re.search(r'ARTICLE_TYPE:\s*(\w+)', response2, re.IGNORECASE)
-        if type_match:
-            article_type = type_match.group(1).lower()
-        
-        # Case studies and blog posts are automatically not relevant
-        if article_type in ['case_study', 'blog_post', 'policy']:
-            logger.info(f"Rejected by type ({article_type}): {item.title[:40]}")
-            return AnalysisResult(
-                item=item,
-                is_relevant=False,
-                summary=response1,
-                issue_body=""
-            )
-        
-        # Parse RELEVANT field with flexible regex
-        # Handles: "RELEVANT: YES", "RELEVANT:YES", "RELEVANT: YES - because...", "RELEVANT: yes"
-        relevant_match = re.search(r'RELEVANT:\s*(YES|NO)\b', response2, re.IGNORECASE)
-        if relevant_match:
-            is_relevant = relevant_match.group(1).upper() == 'YES'
-        else:
-            # RELEVANT field not found - check for unstructured response indicating relevance
-            # This is a warning case - the LLM didn't follow instructions
-            # Check if response starts with YES/NO without proper format
-            stripped_response = response2.strip()
-            if re.match(r'^YES\b', stripped_response, re.IGNORECASE):
-                logger.warning(
-                    f"LLM response missing 'RELEVANT:' prefix but starts with YES - "
-                    f"treating as relevant with warning: {item.title[:40]}"
-                )
-                if os.getenv('GITHUB_ACTIONS'):
-                    print(f"::warning title=LLM Format Issue::Response missing RELEVANT: prefix for: {item.title[:60]}")
-                is_relevant = True
-            elif re.match(r'^NO\b', stripped_response, re.IGNORECASE):
-                logger.warning(
-                    f"LLM response missing 'RELEVANT:' prefix but starts with NO - "
-                    f"treating as not relevant: {item.title[:40]}"
-                )
-                is_relevant = False
-            else:
-                # Can't determine relevance from response format
-                logger.warning(
-                    f"LLM response missing 'RELEVANT:' field entirely - "
-                    f"defaulting to NOT relevant for safety: {item.title[:40]}"
-                )
-                if os.getenv('GITHUB_ACTIONS'):
-                    print(f"::warning title=LLM Format Issue::Cannot parse RELEVANT field for: {item.title[:60]}")
-                is_relevant = False
-        
-        # Validate response format when marking as relevant
-        if is_relevant:
-            has_exclusion = bool(re.search(r'EXCLUSION_CHECK:', response2, re.IGNORECASE))
-            has_type = bool(re.search(r'ARTICLE_TYPE:', response2, re.IGNORECASE))
-            has_relevant = bool(re.search(r'RELEVANT:', response2, re.IGNORECASE))
-            has_reason = bool(re.search(r'REASON:', response2, re.IGNORECASE))
-            
-            missing_fields = []
-            if not has_exclusion:
-                missing_fields.append('EXCLUSION_CHECK')
-            if not has_type:
-                missing_fields.append('ARTICLE_TYPE')
-            if not has_relevant:
-                missing_fields.append('RELEVANT')
-            if not has_reason:
-                missing_fields.append('REASON')
-            
-            if missing_fields:
-                logger.warning(
-                    f"LLM response missing expected fields ({', '.join(missing_fields)}): {item.title[:40]}"
-                )
-                if os.getenv('GITHUB_ACTIONS'):
-                    print(f"::warning title=Incomplete LLM Response::Missing {', '.join(missing_fields)} for: {item.title[:60]}")
-        
-        # Extract reason
-        if 'REASON:' in response2.upper():
-            idx = response2.upper().index('REASON:')
-            end_idx = response2.upper().find('RESOLVES_WATCHLIST:', idx)
-            if end_idx == -1:
-                end_idx = len(response2)
-            reason = response2[idx + 7:end_idx].strip()
-        
-        # Check for watchlist resolution
-        watchlist_match = re.search(r'RESOLVES_WATCHLIST:\s*#?(\d+)', response2)
-        if watchlist_match:
-            resolves_watchlist = int(watchlist_match.group(1))
-        
-        if not is_relevant:
-            logger.info(f"Not relevant: {item.title[:40]}... - {reason[:50]}")
-            return AnalysisResult(
-                item=item, 
-                is_relevant=False, 
-                summary=response1, 
-                issue_body=""
-            )
-        
-        logger.info(f"✓ RELEVANT ({article_type}): {item.title[:40]}... - {reason[:50]}")
-        if resolves_watchlist:
-            logger.info(f"  Resolves watchlist item #{resolves_watchlist}")
-        
-        # Query 3: Generate issue body
-        prompt3 = f"""<task>
-Create a GitHub issue body for this AI API release notification.
-</task>
-
-<article>
-Title: {item.title}
-Source: {item.source_name}
-Link: {item.link}
-Summary: {response1}
-</article>
-
-<content>
-{item.full_content[:5000] if item.full_content else item.description}
-</content>
-
-<format>
-Write a clear, professional Markdown summary including:
-
-## What's New
-[Specific details: model names, API endpoints, version numbers, capabilities]
-
-## Key Details  
-[Technical specifics relevant to API developers: pricing, rate limits, parameters]
-
-## Developer Impact
-[What developers need to know or do]
-
-## Platform Availability
-[Note if this mentions specific platforms: direct API, AWS Bedrock, Google Cloud Vertex AI, Azure]
-</format>
-
-<rules>
-- Be factual and specific
-- Include exact model names and version numbers
-- Note any action items or migration requirements
-- Keep it concise but complete
-</rules>"""
-
-        response3, error3 = self.llm.query(prompt3)
-        
-        if error3:
-            logger.error(f"Query 3 failed for {item.title[:40]}: {error3}")
-            response3 = f"""## {item.title}
-
-**Summary:** {response1}
-
-**Source:** [{item.source_name}]({item.link})
-
-{item.description if item.description else 'See link for full details.'}"""
-        
-        return AnalysisResult(
-            item=item,
-            is_relevant=True,
-            summary=response1,
-            issue_body=response3,
-            resolves_watchlist=resolves_watchlist
-        )
-    
-    def _analyze_items_parallel(self, items: List[ContentItem], 
-                                handled: List[HandledRelease], 
-                                watchlist_items: List[WatchlistItem]) -> List[AnalysisResult]:
-        """Analyze multiple items in parallel."""
-        # Filter out already handled items first
-        to_analyze = [item for item in items if not self._is_handled(item, handled)]
-        
-        if not to_analyze:
-            return []
-        
-        logger.info(f"Analyzing {len(to_analyze)} items in parallel (max {self.max_llm_workers} workers)...")
-        
-        results = []
-        
-        with ThreadPoolExecutor(max_workers=self.max_llm_workers) as executor:
-            future_to_item = {
-                executor.submit(self._analyze_item, item, watchlist_items): item 
-                for item in to_analyze
-            }
-            
-            for future in as_completed(future_to_item):
-                item = future_to_item[future]
-                try:
-                    result = future.result()
-                    if result.is_relevant:
-                        results.append(result)
-                except Exception as e:
-                    logger.error(f"Analysis failed for {item.title[:40]}: {e}")
-        
-        logger.info(f"Found {len(results)} relevant items")
-        return results
-    
-    # =========================================================================
-    # GitHub Issue Management
-    # =========================================================================
-    
-    def _create_issue(self, site_info: dict, result: AnalysisResult) -> Optional[int]:
-        """Create a GitHub issue for a relevant release."""
-        if not self.github_token or not self.github_repo:
-            logger.error("GitHub not configured")
-            return None
-        
-        try:
-            item = result.item
-            title = f"{site_info['emoji']} {item.source_name}: {item.title[:70]}"
-            
-            watchlist_note = ""
-            if result.resolves_watchlist:
-                watchlist_note = f"\n\n> 🎯 **Resolves watchlist item #{result.resolves_watchlist}**\n"
-            
-            full_body = f"""## New Release Detected
-
-**Source:** [{item.source_name}]({item.link})  
-**Detected:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
-{watchlist_note}
----
-
-{result.issue_body}
-
----
-
-### Quick Summary
-{result.summary}
-
-### Actions
-- [ ] Review the release
-- [ ] Update affected code/docs if needed
-
-*Auto-generated by AI Website Monitor*
-"""
-            
-            labels = ['type:release', site_info['label'], 'auto-close-7d']
-            
-            resp = self._github_api('POST', '/issues', json={
-                'title': title,
-                'body': full_body,
-                'labels': labels
-            })
-            
-            if resp:
-                issue = resp.json()
-                logger.info(f"✅ Created issue #{issue['number']}")
-                return issue['number']
-            else:
-                self.errors.append(f"Issue creation failed for: {item.title[:50]}")
-            
-        except Exception as e:
-            logger.error(f"Issue creation failed: {e}")
-            self.errors.append(f"Issue creation: {e}")
-        
-        return None
-    
-    def _close_old_issues(self):
-        """Auto-close issues older than 7 days with auto-close-7d label."""
-        resp = self._github_api('GET', '/issues', params={
-            'labels': 'auto-close-7d',
-            'state': 'open',
-            'per_page': 100
-        })
-        
-        if not resp:
-            return
-        
-        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-        for issue in resp.json():
-            try:
-                created = datetime.fromisoformat(issue['created_at'].replace('Z', '+00:00'))
-                if created < cutoff:
-                    result = self._github_api('PATCH', f'/issues/{issue["number"]}', json={
-                        'state': 'closed'
-                    })
-                    if result:
-                        logger.info(f"Auto-closed issue #{issue['number']}")
-                    else:
-                        logger.warning(f"Failed to auto-close issue #{issue['number']}")
-            except Exception as e:
-                logger.warning(f"Failed to close issue #{issue.get('number')}: {e}")
-    
-    def _create_error_issue(self):
-        """Create an issue summarizing errors from this run."""
-        if not self.errors or not self.github_token or not self.github_repo:
-            return
-        
-        try:
-            resp = self._github_api('POST', '/issues', json={
-                'title': '⚠️ Monitor Errors',
-                'body': f"**Errors from run at {datetime.now(timezone.utc).isoformat()}:**\n\n" + 
-                        '\n'.join(f"- {e}" for e in self.errors),
-                'labels': ['type:bug']
-            })
-            if resp:
-                logger.info(f"Created error issue #{resp.json()['number']}")
-            else:
-                logger.error("Failed to create error issue")
-        except Exception as e:
-            logger.error(f"Error issue creation failed: {e}")
-    
-    # =========================================================================
-    # Main Processing
-    # =========================================================================
-    
-    def _process_site(self, site_key: str, site_info: dict, 
-                      handled: List[HandledRelease], 
-                      watchlist_items: List[WatchlistItem]) -> List[AnalysisResult]:
-        """Process a single site: extract, fetch articles, analyze."""
-        logger.info(f"\n{'='*50}")
-        logger.info(f"Processing: {site_info['name']}")
-        logger.info(f"{'='*50}")
-        
-        # Extract items (respects 7 day / 10 item limits)
-        if site_info['type'] == 'rss':
-            items = self._extract_rss(site_info['url'], site_info['name'])
-        elif site_info['type'] == 'html_news':
-            items = self._extract_anthropic_news(
-                site_info['url'], site_info['name'], site_info['base_url']
-            )
-        elif site_info['type'] == 'html_changelog':
-            items = self._extract_gemini_changelog(site_info['url'], site_info['name'])
-        else:
-            logger.warning(f"Unknown type: {site_info['type']}")
-            return []
-        
-        if not items:
-            logger.info(f"No items from {site_info['name']}")
-            return []
-        
-        # Filter out already handled
-        new_items = [item for item in items if not self._is_handled(item, handled)]
-        logger.info(f"Found {len(items)} items, {len(new_items)} are new")
-        
-        if not new_items:
-            return []
-        
-        # Fetch article content in parallel
-        new_items = self._fetch_articles_parallel(new_items, site_info['base_url'])
-        
-        # Analyze items in parallel
-        results = self._analyze_items_parallel(new_items, handled, watchlist_items)
-        
-        return results
-    
-    def check_all_websites(self):
-        """Main entry point: check all websites for new releases."""
+    def check_all(self):
+        """Main entry point: scrape → diff → enrich → issue."""
         logger.info("=" * 60)
-        logger.info(f"Monitor started: {datetime.now(timezone.utc)}")
-        logger.info(f"Limits: {self.time_window_days} days OR {self.max_items_per_source} items per source")
+        logger.info("AI Model Availability Monitor v2")
+        logger.info(f"Started: {datetime.now(timezone.utc)}")
+        if self.dry_run:
+            logger.info("MODE: DRY RUN (no GitHub changes)")
+        if self.seed:
+            logger.info("MODE: SEED (first-run baseline, no issues created)")
         logger.info("=" * 60)
-        
-        # Ensure labels exist
+
         self._ensure_labels_exist()
-        
-        # Process false positives from previous runs
         self._process_false_positives()
-        
-        # Fetch and process watchlist
+
+        # Watchlist management
         watchlist_issues = self._fetch_open_watchlist_issues()
-        watchlist_items = []
-        for issue in watchlist_issues:
-            item = self._parse_watchlist_issue(issue)
-            if item:
-                watchlist_items.append(item)
-        
+        watchlist_items = [
+            item for issue in watchlist_issues
+            if (item := self._parse_watchlist_issue(issue)) is not None
+        ]
         logger.info(f"Loaded {len(watchlist_items)} watchlist items")
-        
-        # Close expired watchlist items
         self._close_expired_watchlist(watchlist_items)
-        
-        # Regenerate watchlist.md from remaining open items
+
+        # Regenerate watchlist.md
         watchlist_issues = self._fetch_open_watchlist_issues()
-        watchlist_items = []
-        for issue in watchlist_issues:
-            item = self._parse_watchlist_issue(issue)
-            if item:
-                watchlist_items.append(item)
-        
+        watchlist_items = [
+            item for issue in watchlist_issues
+            if (item := self._parse_watchlist_issue(issue)) is not None
+        ]
         watchlist_md = self._generate_watchlist_md(watchlist_items)
         watchlist_path = self.storage_dir / "watchlist.md"
-        
-        existing_watchlist = ""
-        if watchlist_path.exists():
-            existing_watchlist = watchlist_path.read_text()
-        
-        existing_no_ts = re.sub(r'Last updated:.*', '', existing_watchlist)
-        new_no_ts = re.sub(r'Last updated:.*', '', watchlist_md)
-        
-        if existing_no_ts.strip() != new_no_ts.strip():
+
+        existing = watchlist_path.read_text() if watchlist_path.exists() else ""
+        if re.sub(r'Last updated:.*', '', existing).strip() != re.sub(r'Last updated:.*', '', watchlist_md).strip():
             watchlist_path.write_text(watchlist_md)
             logger.info("Updated watchlist.md")
-        
-        # Load context files for analysis
-        self._watchlist_content, self._mistakes_content = self._load_context_files()
-        
-        # Pre-fetch known models
-        logger.info("Fetching current model lists from provider documentation...")
-        known_models = self._fetch_known_models()
-        total_models = sum(len(v) for v in known_models.values())
-        logger.info(f"Loaded {total_models} known models across all providers")
-        
-        # Close old issues
+
         self._close_old_issues()
-        
-        # Load handled releases
-        handled = self._load_handled()
-        logger.info(f"Loaded {len(handled)} previously handled releases")
-        
-        # Process all sites
-        all_results: List[Tuple[str, dict, AnalysisResult]] = []
-        
-        with ThreadPoolExecutor(max_workers=len(self.websites)) as executor:
-            future_to_site = {
-                executor.submit(
-                    self._process_site, key, info, handled, watchlist_items
-                ): (key, info)
-                for key, info in self.websites.items()
-            }
-            
-            for future in as_completed(future_to_site):
-                site_key, site_info = future_to_site[future]
-                try:
-                    results = future.result()
-                    for result in results:
-                        all_results.append((site_key, site_info, result))
-                except Exception as e:
-                    logger.error(f"Site processing failed for {site_info['name']}: {e}")
-                    self.errors.append(f"{site_info['name']}: {e}")
-        
-        # Create issues
+
+        # =================================================================
+        # PHASE 1: Deterministic model scraping
+        # =================================================================
+        logger.info("\n" + "=" * 60)
+        logger.info("PHASE 1: Scraping platform documentation pages")
+        logger.info("=" * 60)
+
+        known = self._load_known_models()
+        total_known = sum(len(m) for m in known.values())
+        logger.info(f"Loaded {total_known} known models from store")
+
+        scraped = self._scrape_all_platforms()
+        total_scraped = sum(len(m) for p in scraped.values() for m in p.values())
+        logger.info(f"Scraped {total_scraped} model entries across all platforms")
+
+        scraped = self._validate_scrape_results(scraped, known)
+
+        # First-run seeding
+        is_first_run = total_known == 0 or self.seed
+        if is_first_run:
+            logger.info("\n" + "-" * 40)
+            logger.info("FIRST RUN: Seeding baseline. No issues will be created.")
+            logger.info("-" * 40)
+
+            now = datetime.now(timezone.utc).isoformat()
+            for provider, platforms in scraped.items():
+                for platform_key, model_ids in platforms.items():
+                    for model_id in model_ids:
+                        if model_id not in known.get(provider, {}):
+                            known.setdefault(provider, {})[model_id] = KnownModel(
+                                first_seen=now, platforms={},
+                            )
+                        known[provider][model_id].platforms[platform_key] = PlatformStatus(
+                            available=True, first_seen=now,
+                        )
+
+            self._save_known_models(known)
+            total_seeded = sum(len(m) for m in known.values())
+            logger.info(f"Seeded {total_seeded} models as known baseline")
+
+            if os.getenv('GITHUB_ACTIONS'):
+                print(f"::notice::First run: seeded {total_seeded} models.")
+            logger.info("=" * 60)
+            logger.info("✅ Seed complete. No issues created.")
+            logger.info("=" * 60)
+            return
+
+        # Compute deltas
+        deltas = self._compute_deltas(scraped, known)
+        logger.info(f"\nFound {len(deltas)} changes:")
+        for d in deltas:
+            tag = "NEW MODEL" if d.is_new_model else "NEW PLATFORM"
+            logger.info(f"  {tag}: {d.provider}/{d.model_id} → {', '.join(d.new_platforms)}")
+
+        if not deltas:
+            logger.info("\n" + "=" * 60)
+            logger.info("✅ No new models or platform changes detected")
+            logger.info("=" * 60)
+            if os.getenv('GITHUB_ACTIONS'):
+                print("::notice::No new models or platform changes detected")
+            return
+
+        # =================================================================
+        # PHASE 2: LLM Enrichment
+        # =================================================================
+        logger.info("\n" + "=" * 60)
+        logger.info("PHASE 2: LLM Enrichment")
+        logger.info("=" * 60)
+
+        enrichments: Dict[str, str] = {}
+        new_model_deltas = [d for d in deltas if d.is_new_model]
+
+        if new_model_deltas and self.news_enrichment:
+            for delta in new_model_deltas:
+                logger.info(f"Enriching {delta.provider}/{delta.model_id}...")
+                enrichments[delta.model_id] = self._enrich_delta(delta)
+        else:
+            logger.info("No new models to enrich (or enrichment disabled)")
+
+        # =================================================================
+        # PHASE 3: Issue Management
+        # =================================================================
+        logger.info("\n" + "=" * 60)
+        logger.info("PHASE 3: Creating/updating GitHub issues")
+        logger.info("=" * 60)
+
         issues_created = 0
-        for site_key, site_info, result in all_results:
-            issue_num = self._create_issue(site_info, result)
-            if issue_num:
-                issues_created += 1
-                handled.append(HandledRelease(
-                    id=result.item.id,
-                    title=result.item.title,
-                    link=result.item.link,
-                    issue_number=issue_num,
-                    detected_at=datetime.now(timezone.utc).isoformat()
-                ))
-                
-                if result.resolves_watchlist:
-                    self._resolve_watchlist_item(result.resolves_watchlist, issue_num)
-        
-        self._save_handled(handled)
-        
+        issues_updated = 0
+
+        for delta in deltas:
+            if delta.is_new_model:
+                enrichment = enrichments.get(delta.model_id, "")
+                issue_num = self._create_new_model_issue(delta, enrichment)
+
+                if issue_num:
+                    issues_created += 1
+                    if delta.model_id in known.get(delta.provider, {}):
+                        known[delta.provider][delta.model_id].issue_number = issue_num
+                    resolved = self._check_watchlist_resolution(delta, watchlist_items)
+                    if resolved:
+                        self._resolve_watchlist_item(resolved, issue_num)
+                elif self.dry_run:
+                    issues_created += 1
+            else:
+                existing_model = known.get(delta.provider, {}).get(delta.model_id)
+                if existing_model and self._update_existing_issue(delta, existing_model):
+                    issues_updated += 1
+
+        self._apply_deltas(deltas, known)
+        self._save_known_models(known)
+
         if self.errors:
             logger.warning(f"⚠️ {len(self.errors)} errors occurred")
             self._create_error_issue()
-        
-        # GitHub Actions annotations
+
         if os.getenv('GITHUB_ACTIONS'):
-            if issues_created:
-                print(f"::notice::Created {issues_created} issue(s)")
-                for site_key, site_info, result in all_results:
-                    print(f"::notice title={site_info['name']}::{result.item.title[:80]}")
+            if issues_created or issues_updated:
+                print(f"::notice::Created {issues_created}, updated {issues_updated} issue(s)")
             else:
-                print("::notice::No new releases detected")
-            
-            if self.errors:
-                for error in self.errors:
-                    print(f"::warning::{error}")
-        
-        logger.info("=" * 60)
-        if issues_created:
-            logger.info(f"✅ Created {issues_created} issue(s)")
+                print("::notice::No issues created or updated")
+            for error in self.errors:
+                print(f"::warning::{error}")
+
+        logger.info("\n" + "=" * 60)
+        if issues_created or issues_updated:
+            logger.info(f"✅ Created {issues_created} issue(s), updated {issues_updated} issue(s)")
         else:
-            logger.info("✅ No new releases detected")
+            logger.info("✅ No issues created or updated")
         logger.info("=" * 60)
 
+
+# =============================================================================
+# CLI
+# =============================================================================
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="AI Model Availability Monitor v2 — "
+                    "Deterministic model detection via doc-page scraping."
+    )
+    parser.add_argument(
+        '--dry-run', action='store_true',
+        help='Show what would be created/updated without touching GitHub'
+    )
+    parser.add_argument(
+        '--seed', action='store_true',
+        help='Force first-run seeding: scrape all, save baseline, create no issues'
+    )
+    parser.add_argument(
+        '--config', default='config.json',
+        help='Path to config file (default: config.json)'
+    )
+
+    args = parser.parse_args()
+
     try:
-        monitor = WebsiteMonitor()
-        monitor.check_all_websites()
+        monitor = WebsiteMonitor(
+            config_path=args.config,
+            dry_run=args.dry_run,
+            seed=args.seed,
+        )
+        monitor.check_all()
     except KeyboardInterrupt:
         logger.info("Interrupted")
     except Exception as e:
