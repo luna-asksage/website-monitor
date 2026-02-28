@@ -6,7 +6,14 @@
       "link": "https://www.anthropic.com/news/claude-code-security",
       "issue_number": 44,
       "detected_at": "2026-02-25T13:00:54.634027+00:00"
+    },
+    {
+      "id": "62f1a58c2962f3c4",
+      "title": "February 26, 2026",
+      "link": "https://ai.google.dev/gemini-api/docs/changelog",
+      "issue_number": 45,
+      "detected_at": "2026-02-28T06:36:34.375103+00:00"
     }
   ],
-  "updated": "2026-02-28T01:45:35.890460+00:00"
+  "updated": "2026-02-28T06:36:34.375473+00:00"
 }
