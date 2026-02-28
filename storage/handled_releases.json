@@ -1,20 +1,6 @@
 {
   "releases": [
     {
-      "id": "1a7d9c0d878119d8",
-      "title": "February 17, 2026",
-      "link": "https://ai.google.dev/gemini-api/docs/changelog",
-      "issue_number": 42,
-      "detected_at": "2026-02-17T18:56:10.544851+00:00"
-    },
-    {
-      "id": "c4a45eed67ee9087",
-      "title": "Introducing Claude Sonnet 4.6 Product Feb 17, 2026 Sonnet 4.6 delivers frontier performance across coding, agents, and professional work at scale.",
-      "link": "https://www.anthropic.com/news/claude-sonnet-4-6",
-      "issue_number": 43,
-      "detected_at": "2026-02-17T18:56:11.111272+00:00"
-    },
-    {
       "id": "fe5168dbfadecfd8",
       "title": "Feb 20, 2026 Announcements Making frontier cybersecurity capabilities available to defenders",
       "link": "https://www.anthropic.com/news/claude-code-security",
@@ -22,5 +8,5 @@
       "detected_at": "2026-02-25T13:00:54.634027+00:00"
     }
   ],
-  "updated": "2026-02-27T18:40:03.261253+00:00"
+  "updated": "2026-02-28T01:45:35.890460+00:00"
 }
