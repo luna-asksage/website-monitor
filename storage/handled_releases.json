@@ -27,7 +27,21 @@
       "link": "https://openai.com/index/gpt-5-3-instant-system-card",
       "issue_number": 47,
       "detected_at": "2026-03-03T18:44:26.320139+00:00"
+    },
+    {
+      "id": "960620ee220ccd44",
+      "title": "Introducing GPT-5.4",
+      "link": "https://openai.com/index/introducing-gpt-5-4",
+      "issue_number": 48,
+      "detected_at": "2026-03-05T19:15:15.391587+00:00"
+    },
+    {
+      "id": "72f5b13a4b583e4b",
+      "title": "GPT-5.4 Thinking System Card",
+      "link": "https://openai.com/index/gpt-5-4-thinking-system-card",
+      "issue_number": 49,
+      "detected_at": "2026-03-05T19:15:15.923842+00:00"
     }
   ],
-  "updated": "2026-03-05T12:56:36.584014+00:00"
+  "updated": "2026-03-05T19:15:15.924281+00:00"
 }
