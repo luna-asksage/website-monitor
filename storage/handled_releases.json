@@ -1,13 +1,6 @@
 {
   "releases": [
     {
-      "id": "fe5168dbfadecfd8",
-      "title": "Feb 20, 2026 Announcements Making frontier cybersecurity capabilities available to defenders",
-      "link": "https://www.anthropic.com/news/claude-code-security",
-      "issue_number": 44,
-      "detected_at": "2026-02-25T13:00:54.634027+00:00"
-    },
-    {
       "id": "62f1a58c2962f3c4",
       "title": "February 26, 2026",
       "link": "https://ai.google.dev/gemini-api/docs/changelog",
@@ -50,5 +43,5 @@
       "detected_at": "2026-03-07T06:38:05.584562+00:00"
     }
   ],
-  "updated": "2026-03-07T12:42:29.108292+00:00"
+  "updated": "2026-03-07T18:31:10.346018+00:00"
 }
