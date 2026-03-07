@@ -41,7 +41,14 @@
       "link": "https://openai.com/index/gpt-5-4-thinking-system-card",
       "issue_number": 49,
       "detected_at": "2026-03-05T19:15:15.923842+00:00"
+    },
+    {
+      "id": "3aa6a761ad26992e",
+      "title": "Codex Security: now in research preview",
+      "link": "https://openai.com/index/codex-security-now-in-research-preview",
+      "issue_number": 50,
+      "detected_at": "2026-03-07T06:38:05.584562+00:00"
     }
   ],
-  "updated": "2026-03-07T01:49:49.731355+00:00"
+  "updated": "2026-03-07T06:38:05.585244+00:00"
 }
