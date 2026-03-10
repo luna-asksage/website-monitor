@@ -107,6 +107,7 @@
       "gemini-3-pro",
       "gemini-3-pro-image-preview",
       "gemini-3-pro-preview",
+      "gemini-3-pro-preview-deprecated",
       "gemini-3.1-flash-image-preview",
       "gemini-3.1-flash-lite-preview",
       "gemini-3.1-pro",
@@ -155,5 +156,5 @@
       "gemini-robotics-preview"
     ]
   },
-  "updated": "2026-03-07T01:49:24.933656+00:00"
+  "updated": "2026-03-10T01:51:34.212700+00:00"
 }
