@@ -1,13 +1,6 @@
 {
   "releases": [
     {
-      "id": "c4a45eed67ee9087",
-      "title": "Product Feb 17, 2026 Introducing Claude Sonnet 4.6 Sonnet 4.6 delivers frontier performance across coding, agents, and professional work at scale.",
-      "link": "https://www.anthropic.com/news/claude-sonnet-4-6",
-      "issue_number": 46,
-      "detected_at": "2026-02-28T18:31:13.902798+00:00"
-    },
-    {
       "id": "88f176f810334d87",
       "title": "GPT-5.3 Instant System Card",
       "link": "https://openai.com/index/gpt-5-3-instant-system-card",
@@ -43,5 +36,5 @@
       "detected_at": "2026-03-10T12:56:52.315960+00:00"
     }
   ],
-  "updated": "2026-03-10T12:56:52.316361+00:00"
+  "updated": "2026-03-10T18:44:04.648021+00:00"
 }
