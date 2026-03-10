@@ -34,7 +34,14 @@
       "link": "https://openai.com/index/codex-security-now-in-research-preview",
       "issue_number": 50,
       "detected_at": "2026-03-07T06:38:05.584562+00:00"
+    },
+    {
+      "id": "52874be115a49de1",
+      "title": "March 9, 2026",
+      "link": "https://ai.google.dev/gemini-api/docs/changelog",
+      "issue_number": 51,
+      "detected_at": "2026-03-10T12:56:52.315960+00:00"
     }
   ],
-  "updated": "2026-03-10T06:45:38.630752+00:00"
+  "updated": "2026-03-10T12:56:52.316361+00:00"
 }
