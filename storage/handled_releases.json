@@ -34,7 +34,14 @@
       "link": "https://ai.google.dev/gemini-api/docs/changelog",
       "issue_number": 51,
       "detected_at": "2026-03-10T12:56:52.315960+00:00"
+    },
+    {
+      "id": "57e0ffa8a8c96936",
+      "title": "From model to agent: Equipping the Responses API with a computer environment",
+      "link": "https://openai.com/index/equip-responses-api-computer-environment",
+      "issue_number": 52,
+      "detected_at": "2026-03-12T06:53:28.488809+00:00"
     }
   ],
-  "updated": "2026-03-12T01:57:40.308626+00:00"
+  "updated": "2026-03-12T06:53:28.489176+00:00"
 }
