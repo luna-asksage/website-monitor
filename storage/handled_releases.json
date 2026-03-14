@@ -1,13 +1,6 @@
 {
   "releases": [
     {
-      "id": "88f176f810334d87",
-      "title": "GPT-5.3 Instant System Card",
-      "link": "https://openai.com/index/gpt-5-3-instant-system-card",
-      "issue_number": 47,
-      "detected_at": "2026-03-03T18:44:26.320139+00:00"
-    },
-    {
       "id": "960620ee220ccd44",
       "title": "Introducing GPT-5.4",
       "link": "https://openai.com/index/introducing-gpt-5-4",
@@ -43,5 +36,5 @@
       "detected_at": "2026-03-12T06:53:28.488809+00:00"
     }
   ],
-  "updated": "2026-03-13T18:39:43.739937+00:00"
+  "updated": "2026-03-14T01:53:00.898626+00:00"
 }
